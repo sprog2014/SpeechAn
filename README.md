@@ -32,7 +32,7 @@
 5. Инициализировать БД PostgreSQL:
  ```psql -h ... -U postgres -f db/init.sql```
 
-6. Скачать модель Saiga/Llama3 8B GGUF (q4_K_M) и поместить в models/.
+6. Загрузить необходимые модели (см. раздел «Загрузка моделей»).
 
 7. Запустить диспетчер (он же запускает пул воркеров):
  ```bash scripts/run_dispatcher.sh```
@@ -40,11 +40,40 @@
 8. Для визуализации запустить дашборд:
  ```streamlit run dashboard/dashboard.py --server.port 8501```
 
+## Загрузка моделей
+
+Система использует три модели.
+Путь для хранения моделей по умолчанию – каталог ```models/``` в корне проекта.
+Для изменения пути используйте переменные окружения в ```.env```.
+
+### 1. faster-whisper large-v3-turbo
+- Загружается автоматически при первом запуске из Hugging Face Hub.
+- Кэшируется в ```~/.cache/huggingface/hub```.
+- Никаких дополнительных действий не требуется.
+- Если нужен оффлайн-режим, предварительно скачайте модель:
+ ```python -c "from faster_whisper import WhisperModel; WhisperModel('Systran/faster-whisper-large-v3-turbo', device='cpu', compute_type='int8', download_root='./models')"```
+ и установите переменную окружения ```FASTER_WHISPER_MODEL_PATH=./models```.
+
+### 2. GigaAMEmo (Сбер)
+- Загружается автоматически через библиотеку transformers при первом вызове.
+- Кэш также в ```~/.cache/huggingface/hub```.
+- Для оффлайн-режима скачайте вручную:
+ ```huggingface-cli download SberDevices/GigaAMEmo --local-dir ./models/GigaAMEmo```
+ и укажите путь в коде (по умолчанию ищется в кэше, но можно задать ```local_files_only=True```).
+
+### 3. Saiga/Llama3 8B (GGUF)
+- Не загружается автоматически. Необходимо скачать файл GGUF вручную.
+- Рекомендуемая квантованная версия: ```q4_K_M``` (баланс качество/память).
+- Скачайте файл ```saiga_llama3_8b_q4_K_M.gguf``` с Hugging Face:
+ ```wget https://huggingface.co/IlyaGusev/saiga_llama3_8b_gguf/resolve/main/saiga_llama3_8b_q4_K_M.gguf -P models/```
+- Путь к файлу задаётся в ```.env``` переменной ```LLM_MODEL_PATH``` (по умолчанию ```models/saiga_llama3_8b_q4_K_M.gguf```).
+
 ## Конфигурация
 Все настройки – в ```.env```. Основные переменные:
 - ```RECORDS_ROOT``` – корень архива mp3 с иерархией год/месяц/день
 - ```NUM_WORKERS``` – количество параллельных процессов-воркеров
 - ```OMP_NUM_THREADS``` – потоки на один воркер
+- ```LLM_MODEL_PATH``` – путь к GGUF-модели Saiga
 
 ## Структура БД
 - ```calls``` – метаданные звонка (из MySQL) + путь к файлу, статус
