@@ -19,26 +19,26 @@
 ## Установка и запуск
 
 1. Клонировать репозиторий:
- ```bash | git clone <repo_url> | cd call_analysis```
+ ```git clone <repo_url> | cd call_analysis```
 
 2. Установить зависимости:
- ```bash | python -m venv venv | source venv/bin/activate | pip install -r requirements.txt```
+ ```python -m venv venv | source venv/bin/activate | pip install -r requirements.txt```
 
 3. Установить ffmpeg (если отсутствует):
- ```bash | sudo apt-get install ffmpeg```
+ ```sudo apt-get install ffmpeg```
 
 4. Создать ```.env``` на основе ```.env.example```, заполнить параметры подключения.
 
 5. Инициализировать БД PostgreSQL:
- ```bash | psql -h ... -U postgres -f db/init.sql```
+ ```psql -h ... -U postgres -f db/init.sql```
 
 6. Скачать модель Saiga/Llama3 8B GGUF (q4_K_M) и поместить в models/.
 
 7. Запустить диспетчер (он же запускает пул воркеров):
- ```bash | bash scripts/run_dispatcher.sh```
+ ```bash scripts/run_dispatcher.sh```
 
 8. Для визуализации запустить дашборд:
- ```bash | streamlit run dashboard/dashboard.py --server.port 8501```
+ ```streamlit run dashboard/dashboard.py --server.port 8501```
 
 ## Конфигурация
 Все настройки – в ```.env```. Основные переменные:
