@@ -1,5 +1,5 @@
 import json
-from models import load_llm
+from models import get_llm
 
 PROMPT_TEMPLATE = """Ты — эксперт по контролю качества в медицинском колл-центре. Проанализируй диалог оператора и клиента и верни **только** JSON без лишних слов.
 Поля:
@@ -14,16 +14,14 @@ PROMPT_TEMPLATE = """Ты — эксперт по контролю качест�
 {transcript}
 """
 
-def analyze_transcript(transcript_text):
-    llm = load_llm()
+def analyze_transcript(transcript_text: str) -> dict:
+    llm = get_llm()
     prompt = PROMPT_TEMPLATE.format(transcript=transcript_text)
     output = llm.create_completion(prompt, max_tokens=500, temperature=0.1)
-    response_text = output['choices'][0]['text']
-    # Находим JSON в ответе
-    start = response_text.find('{')
-    end = response_text.rfind('}') + 1
+    response = output['choices'][0]['text']
+    # Извлекаем JSON
+    start = response.find('{')
+    end = response.rfind('}') + 1
     if start == -1 or end <= start:
         raise ValueError("JSON not found in LLM response")
-    json_str = response_text[start:end]
-    result = json.loads(json_str)
-    return result
+    return json.loads(response[start:end])
