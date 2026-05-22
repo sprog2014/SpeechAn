@@ -13,12 +13,21 @@ def predict_emotion(audio_chunk, sample_rate=16000):
     if audio_chunk.ndim == 1:
         audio_chunk = audio_chunk.unsqueeze(0)  # [1, samples]
 
-    # GigaAMEmo ожидает батч [batch, samples]
+    # GigaAMEmo ожидает батч [batch, samples] и длины
+    lengths = torch.tensor([audio_chunk.shape[1]])
+
     with torch.no_grad():
-        outputs = model(audio_chunk)
-        # В зависимости от версии gigaam, вывод может быть разным
-        # Обычно это объект с атрибутом logits или просто тензор
-        if hasattr(outputs, 'logits'):
+        # В официальном пакете gigaam вызов модели возвращает промежуточные слои
+        # Нам нужно прогнать через голову
+        outputs = model(audio_chunk, lengths)
+
+        # Если это GigaAMEmo из пакета gigaam
+        if isinstance(outputs, tuple):
+            features = outputs[0]
+            # Пулинг по времени (среднее)
+            pooled = features.mean(dim=-1)
+            logits = model.head(pooled)
+        elif hasattr(outputs, 'logits'):
             logits = outputs.logits
         else:
             logits = outputs
@@ -27,12 +36,9 @@ def predict_emotion(audio_chunk, sample_rate=16000):
         probs = torch.softmax(logits, dim=-1)
         confidence = probs[0, pred_id].item()
 
-    # Попытка достать метки из конфига или использовать дефолтные
-    if hasattr(model, 'config') and hasattr(model.config, 'id2label'):
-        emotion_labels = model.config.id2label
-    else:
-        # Дефолтные метки для GigaAMEmo если конфиг недоступен
-        emotion_labels = {0: 'neutral', 1: 'positive', 2: 'negative', 3: 'other', 4: 'speech'}
+    # Дефолтные метки для GigaAMEmo
+    # 0: 'neutral', 1: 'positive', 2: 'negative', 3: 'angry' (или 'other' в зависимости от версии)
+    emotion_labels = {0: 'neutral', 1: 'positive', 2: 'negative', 3: 'angry'}
 
     emotion = emotion_labels.get(pred_id, f"unknown_{pred_id}")
     return emotion, confidence
