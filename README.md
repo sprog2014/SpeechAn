@@ -69,10 +69,10 @@
 
 ### 3. Saiga/Llama3 8B (GGUF)
 - Не загружается автоматически. Необходимо скачать файл GGUF вручную.
-- Рекомендуемая квантованная версия: ```q4_K_M``` (баланс качество/память).
-- Скачайте файл ```saiga_llama3_8b_q4_K_M.gguf``` с Hugging Face:
- ```wget https://huggingface.co/IlyaGusev/saiga_llama3_8b_gguf/resolve/main/saiga_llama3_8b_q4_K_M.gguf -P models/```
-- Путь к файлу задаётся в ```.env``` переменной ```LLM_MODEL_PATH``` (по умолчанию ```models/saiga_llama3_8b_q4_K_M.gguf```).
+- Рекомендуемая квантованная версия: ```q4_K``` (баланс качество/память).
+- Скачайте файл ```model-q4_K.gguf``` с Hugging Face:
+ ```wget https://huggingface.co/IlyaGusev/saiga_llama3_8b_gguf/resolve/main/model-q4_K.gguf -P models/```
+- Путь к файлу задаётся в ```.env``` переменной ```LLM_MODEL_PATH``` (по умолчанию ```models/model-q4_K.gguf```).
 
 ## Конфигурация
 Все настройки – в ```.env```. Основные переменные:
