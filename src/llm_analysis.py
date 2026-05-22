@@ -1,5 +1,5 @@
 import json
-from models import get_llm
+from models import get_locked_llm
 
 PROMPT_TEMPLATE = """Ты — эксперт по контролю качества в медицинском колл-центре. Проанализируй диалог оператора и клиента и верни **только** JSON без лишних слов.
 Поля:
@@ -15,7 +15,7 @@ PROMPT_TEMPLATE = """Ты — эксперт по контролю качест�
 """
 
 def analyze_transcript(transcript_text: str) -> dict:
-    llm = get_llm()
+    llm = get_locked_llm()
     prompt = PROMPT_TEMPLATE.format(transcript=transcript_text)
     output = llm.create_completion(prompt, max_tokens=500, temperature=0.1)
     response = output['choices'][0]['text']

@@ -21,7 +21,8 @@ def get_whisper():
             _whisper_model = WhisperModel(
                 "h2oai/faster-whisper-large-v3-turbo",
                 device="cpu",
-                compute_type="int8"
+                compute_type="int8",
+                cpu_threads=int(os.getenv("OMP_NUM_THREADS", 8))
             )
     return _whisper_model
 
@@ -45,3 +46,22 @@ def get_llm():
                 verbose=False
             )
     return _llm
+
+class LockedLlama:
+    def __init__(self, llm_instance):
+        self.llm = llm_instance
+        self.lock = threading.Lock()
+
+    def create_completion(self, *args, **kwargs):
+        with self.lock:
+            return self.llm.create_completion(*args, **kwargs)
+
+_locked_llm = None
+_locked_llm_lock = threading.Lock()
+
+def get_locked_llm():
+    global _locked_llm
+    with _locked_llm_lock:
+        if _locked_llm is None:
+            _locked_llm = LockedLlama(get_llm())
+    return _locked_llm
