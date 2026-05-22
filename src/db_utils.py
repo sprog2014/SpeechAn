@@ -1,23 +1,66 @@
 import psycopg2
+from psycopg2 import pool
+from psycopg2.extras import RealDictCursor
 import mysql.connector
-from config import PG_CONFIG, MYSQL_CONFIG
+from mysql.connector import pooling
+from config import PG_CONFIG, MYSQL_CONFIG, NUM_WORKERS
 from contextlib import contextmanager
+import logging
+import json
+
+# Инициализация пула соединений PostgreSQL
+try:
+    pg_pool = psycopg2.pool.ThreadedConnectionPool(
+        minconn=1,
+        maxconn=NUM_WORKERS + 5,
+        **PG_CONFIG
+    )
+    logging.info("PostgreSQL connection pool created")
+except Exception as e:
+    logging.error(f"Error creating PostgreSQL pool: {e}")
+    pg_pool = None
+
+# Инициализация пула соединений MySQL
+try:
+    mysql_pool = mysql.connector.pooling.MySQLConnectionPool(
+        pool_name="mypool",
+        pool_size=min(32, NUM_WORKERS + 5),
+        **MYSQL_CONFIG
+    )
+    logging.info("MySQL connection pool created")
+except Exception as e:
+    logging.error(f"Error creating MySQL pool: {e}")
+    mysql_pool = None
 
 @contextmanager
 def get_pg_connection():
-    conn = psycopg2.connect(**PG_CONFIG)
-    try:
-        yield conn
-    finally:
-        conn.close()
+    if pg_pool is None:
+        conn = psycopg2.connect(**PG_CONFIG)
+        try:
+            yield conn
+        finally:
+            conn.close()
+    else:
+        conn = pg_pool.getconn()
+        try:
+            yield conn
+        finally:
+            pg_pool.putconn(conn)
 
 @contextmanager
 def get_mysql_connection():
-    conn = mysql.connector.connect(**MYSQL_CONFIG)
-    try:
-        yield conn
-    finally:
-        conn.close()
+    if mysql_pool is None:
+        conn = mysql.connector.connect(**MYSQL_CONFIG)
+        try:
+            yield conn
+        finally:
+            conn.close()
+    else:
+        conn = mysql_pool.get_connection()
+        try:
+            yield conn
+        finally:
+            conn.close()
 
 def fetch_call_metadata(linkedid):
     with get_mysql_connection() as conn:
@@ -32,11 +75,12 @@ def fetch_call_metadata(linkedid):
         row = cursor.fetchone()
         if not row:
             raise ValueError(f"No metadata for linkedid {linkedid}")
+        row['linkedid'] = linkedid
         return row
 
-def upsert_call(metadata, file_path):
-    with get_pg_connection() as conn:
-        cur = conn.cursor()
+def upsert_call(metadata, file_path, conn=None):
+    def _execute(c):
+        cur = c.cursor()
         cur.execute("""
             INSERT INTO calls (linkedid, calldate, src, answeredext, direction,
                                duration, billsec, fromtrunksrc, moduleparams,
@@ -56,44 +100,68 @@ def upsert_call(metadata, file_path):
             metadata['incomingTrunk'],
             file_path
         ))
-        conn.commit()
+        c.commit()
 
-def set_call_done(linkedid):
-    with get_pg_connection() as conn:
-        cur = conn.cursor()
-        cur.execute("UPDATE calls SET processing_status='done' WHERE linkedid=%s", (linkedid,))
-        conn.commit()
+    if conn:
+        _execute(conn)
+    else:
+        with get_pg_connection() as conn:
+            _execute(conn)
 
-def set_call_error(linkedid):
-    with get_pg_connection() as conn:
-        cur = conn.cursor()
-        cur.execute("UPDATE calls SET processing_status='error' WHERE linkedid=%s", (linkedid,))
-        conn.commit()
+def set_call_status(linkedid, status, conn=None):
+    def _execute(c):
+        cur = c.cursor()
+        cur.execute("UPDATE calls SET processing_status=%s WHERE linkedid=%s", (status, linkedid))
+        c.commit()
 
-def insert_transcript(linkedid, channel, start, end, text):
-    with get_pg_connection() as conn:
-        cur = conn.cursor()
+    if conn:
+        _execute(conn)
+    else:
+        with get_pg_connection() as conn:
+            _execute(conn)
+
+def set_call_done(linkedid, conn=None):
+    set_call_status(linkedid, 'done', conn)
+
+def set_call_error(linkedid, conn=None):
+    set_call_status(linkedid, 'error', conn)
+
+def insert_transcript(linkedid, channel, start, end, text, conn=None):
+    def _execute(c):
+        cur = c.cursor()
         cur.execute("""
             INSERT INTO transcripts (linkedid, channel, start_time, end_time, text)
             VALUES (%s, %s, %s, %s, %s)
             RETURNING id
         """, (linkedid, channel, start, end, text))
-        transcript_id = cur.fetchone()[0]
-        conn.commit()
-        return transcript_id
+        tid = cur.fetchone()[0]
+        c.commit()
+        return tid
 
-def insert_emotion(transcript_id, emotion, confidence):
-    with get_pg_connection() as conn:
-        cur = conn.cursor()
+    if conn:
+        return _execute(conn)
+    else:
+        with get_pg_connection() as conn:
+            return _execute(conn)
+
+def insert_emotion(transcript_id, emotion, confidence, conn=None):
+    def _execute(c):
+        cur = c.cursor()
         cur.execute("""
             INSERT INTO speech_emotions (transcript_id, emotion, confidence)
             VALUES (%s, %s, %s)
         """, (transcript_id, emotion, confidence))
-        conn.commit()
+        c.commit()
 
-def insert_evaluation(linkedid, result_json):
-    with get_pg_connection() as conn:
-        cur = conn.cursor()
+    if conn:
+        _execute(conn)
+    else:
+        with get_pg_connection() as conn:
+            _execute(conn)
+
+def insert_evaluation(linkedid, result_json, conn=None):
+    def _execute(c):
+        cur = c.cursor()
         cur.execute("""
             INSERT INTO evaluations (linkedid, politeness_score, client_sentiment,
                                      call_purpose, call_summary, checklist_json, metrics_json)
@@ -111,7 +179,13 @@ def insert_evaluation(linkedid, result_json):
             result_json.get('client_sentiment'),
             result_json.get('call_purpose'),
             result_json.get('call_summary'),
-            result_json.get('checklist', '{}'),
-            result_json.get('metrics', '{}')
+            json.dumps(result_json.get('checklist', {})),
+            json.dumps(result_json.get('metrics', {}))
         ))
-        conn.commit()
+        c.commit()
+
+    if conn:
+        _execute(conn)
+    else:
+        with get_pg_connection() as conn:
+            _execute(conn)
