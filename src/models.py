@@ -1,33 +1,47 @@
 import os
+import threading
 from faster_whisper import WhisperModel
-from transformers import AutoModelForAudioClassification, AutoFeatureExtractor
+from gigaam import GigaAMEmo
 from llama_cpp import Llama
 
-# Глобальные объекты моделей (загружаются один раз при старте воркера)
-whisper_model = None
-emotion_model = None
-emotion_feature_extractor = None
-llm = None
+# Глобальные переменные
+_whisper_model = None
+_whisper_lock = threading.Lock()
 
-def load_whisper():
-    global whisper_model
-    if whisper_model is None:
-        whisper_model = WhisperModel("deepdml/faster-whisper-large-v3-turbo-ct2", device="cpu", compute_type="int8")
-    return whisper_model
+_emotion_model = None
+_emotion_lock = threading.Lock()
 
-def load_emotion_model():
-    global emotion_model, emotion_feature_extractor
-    if emotion_model is None:
-        model_name = "niobures/GigaAM"
-        emotion_model = AutoModelForAudioClassification.from_pretrained(model_name, trust_remote_code=True)
-        emotion_feature_extractor = AutoFeatureExtractor.from_pretrained(model_name, trust_remote_code=True)
-        emotion_model.eval()
-    return emotion_model, emotion_feature_extractor
+_llm = None
+_llm_lock = threading.Lock()
 
-def load_llm():
-    global llm
-    if llm is None:
-        # Путь к скачанной GGUF модели Saiga/Llama3 8B
-        model_path = os.getenv("LLM_MODEL_PATH", "models/model-q4_K.gguf")
-        llm = Llama(model_path=model_path, n_ctx=4096, n_threads=8, verbose=False)
-    return llm
+def get_whisper():
+    global _whisper_model
+    with _whisper_lock:
+        if _whisper_model is None:
+            _whisper_model = WhisperModel(
+                "h2oai/faster-whisper-large-v3-turbo",
+                device="cpu",
+                compute_type="int8"
+            )
+    return _whisper_model
+
+def get_emotion_model():
+    global _emotion_model
+    with _emotion_lock:
+        if _emotion_model is None:
+            _emotion_model = GigaAMEmo.from_pretrained()
+            _emotion_model.eval()
+    return _emotion_model
+
+def get_llm():
+    global _llm
+    with _llm_lock:
+        if _llm is None:
+            model_path = os.getenv("LLM_MODEL_PATH", "models/model-q4_K.gguf")
+            _llm = Llama(
+                model_path=model_path,
+                n_ctx=4096,
+                n_threads=int(os.getenv("OMP_NUM_THREADS", 8)),
+                verbose=False
+            )
+    return _llm
