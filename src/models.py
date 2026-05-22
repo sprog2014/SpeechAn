@@ -1,7 +1,7 @@
 import os
 import threading
 from faster_whisper import WhisperModel
-from gigaam import GigaAMEmo
+import gigaam
 from llama_cpp import Llama
 
 # Глобальные переменные
@@ -30,7 +30,7 @@ def get_emotion_model():
     global _emotion_model
     with _emotion_lock:
         if _emotion_model is None:
-            _emotion_model = GigaAMEmo.from_pretrained()
+            _emotion_model = gigaam.load_model('emo')
             _emotion_model.eval()
     return _emotion_model
 
