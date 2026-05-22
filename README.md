@@ -35,10 +35,16 @@
 6. Загрузить необходимые модели (см. раздел «Загрузка моделей»).
 
 7. Запустить диспетчер (он же запускает пул воркеров):
- ```bash scripts/run_dispatcher.sh```
+ - В Linux:
+   ```bash scripts/run_dispatcher.sh```
+ - В Windows:
+   ```scripts\run_dispatcher.bat```
 
 8. Для визуализации запустить дашборд:
- ```streamlit run dashboard/dashboard.py --server.port 8501```
+ - В Linux:
+   ```streamlit run dashboard/dashboard.py --server.port 8501```
+ - В Windows:
+   ```scripts\run_dashboard.bat```
 
 ## Загрузка моделей
 
