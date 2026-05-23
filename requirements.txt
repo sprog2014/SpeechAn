@@ -1,6 +1,6 @@
 faster-whisper==1.0.3
 pydub==0.25.1
-gigaam==1.0.0
+gigaam>=0.1.0
 torch>=2.0.0
 torchaudio>=2.0.0
 llama-cpp-python==0.2.90
@@ -11,3 +11,4 @@ streamlit==1.35.0
 pandas==2.1.4
 plotly==5.18.0
 librosa==0.10.0
+soundfile
