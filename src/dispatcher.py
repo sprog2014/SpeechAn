@@ -6,21 +6,28 @@ from config import RECORDS_ROOT, NUM_WORKERS
 from db_utils import get_pg_connection
 from worker import process_file
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
+# Настройка логирования диспетчера
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s %(levelname)s [%(name)s] %(message)s'
+)
+logger = logging.getLogger("dispatcher")
 
 # Множество для отслеживания файлов, которые сейчас в обработке
 processing_now = set()
 
 def scan_files():
+    logger.debug("Scanning database for processed files...")
     try:
         with get_pg_connection() as conn:
             cur = conn.cursor()
             cur.execute("SELECT linkedid FROM calls WHERE processing_status IN ('done','processing','error')")
             processed = set(row[0] for row in cur.fetchall())
     except Exception as e:
-        logging.error(f"Error scanning DB: {e}")
+        logger.error(f"Error scanning DB: {e}")
         return []
 
+    logger.debug(f"Scanning directory: {RECORDS_ROOT}")
     files_to_process = []
     for root, dirs, files in os.walk(RECORDS_ROOT):
         for f in files:
@@ -35,27 +42,29 @@ def task_done_callback(future):
     processing_now.discard(linkedid)
     try:
         future.result()
-        logging.info(f"[{linkedid}] Task completed")
+        logger.info(f"[{linkedid}] Task execution finished")
     except Exception as e:
-        logging.error(f"[{linkedid}] Task generated an exception: {e}")
+        logger.error(f"[{linkedid}] Task generated an exception: {e}")
 
 def main():
     # Инициализация глобальных моделей при старте
     from models import get_whisper, get_emotion_model, get_llm
-    logging.info("Pre-loading models...")
+    logger.info("Starting system initialization...")
+    logger.info("Pre-loading models into memory...")
     get_whisper()
     get_emotion_model()
     get_llm()
-    logging.info("Models loaded. Starting dispatcher with %d workers.", NUM_WORKERS)
+    logger.info("All models loaded. Starting main loop.")
+    logger.info(f"Configuration: NUM_WORKERS={NUM_WORKERS}, RECORDS_ROOT={RECORDS_ROOT}")
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=NUM_WORKERS) as executor:
         while True:
-            # Проверяем, есть ли свободные слоты в экзекуторе
-            # (Косвенно через processing_now)
-            if len(processing_now) < NUM_WORKERS:
+            current_active = len(processing_now)
+            if current_active < NUM_WORKERS:
                 files = scan_files()
                 if files:
-                    logging.info(f"Found {len(files)} new files. Submitting up to {NUM_WORKERS - len(processing_now)} tasks.")
+                    to_submit = NUM_WORKERS - current_active
+                    logger.info(f"Found {len(files)} new files. Submitting up to {to_submit} tasks. (Active: {current_active})")
                     for f_path in files:
                         if len(processing_now) >= NUM_WORKERS:
                             break
@@ -63,17 +72,19 @@ def main():
                         linkedid = os.path.splitext(os.path.basename(f_path))[0]
                         processing_now.add(linkedid)
 
+                        logger.info(f"[{linkedid}] Submitting task for file: {f_path}")
                         future = executor.submit(process_file, f_path)
                         future.linkedid = linkedid
                         future.add_done_callback(task_done_callback)
                 else:
                     if not processing_now:
-                        logging.info("No new files and no tasks running. Sleeping 30 seconds.")
+                        logger.info("No new files to process and no active tasks. Sleeping 30s.")
                         time.sleep(30)
                     else:
-                        time.sleep(5) # Ждем освобождения слотов
+                        logger.debug("No new files found. Waiting for active tasks...")
+                        time.sleep(5)
             else:
-                # Пул заполнен, просто ждем немного
+                logger.debug(f"Worker pool is full ({current_active} active). Waiting...")
                 time.sleep(5)
 
 if __name__ == "__main__":

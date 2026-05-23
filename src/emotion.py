@@ -1,5 +1,8 @@
 import torch
+import logging
 from models import get_emotion_model
+
+logger = logging.getLogger(__name__)
 
 def predict_emotion(audio_chunk, sample_rate=16000):
     """
@@ -18,7 +21,6 @@ def predict_emotion(audio_chunk, sample_rate=16000):
 
     with torch.no_grad():
         # В официальном пакете gigaam вызов модели возвращает промежуточные слои
-        # Нам нужно прогнать через голову
         outputs = model(audio_chunk, lengths)
 
         # Если это GigaAMEmo из пакета gigaam
@@ -37,8 +39,7 @@ def predict_emotion(audio_chunk, sample_rate=16000):
         confidence = probs[0, pred_id].item()
 
     # Дефолтные метки для GigaAMEmo
-    # 0: 'neutral', 1: 'positive', 2: 'negative', 3: 'angry' (или 'other' в зависимости от версии)
     emotion_labels = {0: 'neutral', 1: 'positive', 2: 'negative', 3: 'angry'}
-
     emotion = emotion_labels.get(pred_id, f"unknown_{pred_id}")
+
     return emotion, confidence
