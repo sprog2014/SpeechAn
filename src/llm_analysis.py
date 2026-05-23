@@ -1,5 +1,9 @@
 import json
+import logging
+import time
 from models import get_locked_llm
+
+logger = logging.getLogger(__name__)
 
 PROMPT_TEMPLATE = """Ты — эксперт по контролю качества в медицинском колл-центре. Проанализируй диалог оператора и клиента и верни **только** JSON без лишних слов.
 Поля:
@@ -15,13 +19,24 @@ PROMPT_TEMPLATE = """Ты — эксперт по контролю качест�
 """
 
 def analyze_transcript(transcript_text: str) -> dict:
+    start_time = time.time()
+    logger.info("Sending transcript to LLM for analysis...")
+
     llm = get_locked_llm()
     prompt = PROMPT_TEMPLATE.format(transcript=transcript_text)
     output = llm.create_completion(prompt, max_tokens=500, temperature=0.1)
     response = output['choices'][0]['text']
+
+    duration = time.time() - start_time
+    logger.info(f"LLM analysis finished in {duration:.2f}s")
+
     # Извлекаем JSON
     start = response.find('{')
     end = response.rfind('}') + 1
     if start == -1 or end <= start:
+        logger.error(f"Failed to find JSON in LLM response: {response}")
         raise ValueError("JSON not found in LLM response")
-    return json.loads(response[start:end])
+
+    result = json.loads(response[start:end])
+    logger.info(f"LLM score: {result.get('politeness_score')}, sentiment: {result.get('client_sentiment')}")
+    return result

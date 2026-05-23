@@ -1,8 +1,11 @@
 import os
 import threading
-from faster_whisper import WhisperModel
+import logging
 import gigaam
+from faster_whisper import WhisperModel
 from llama_cpp import Llama
+
+logger = logging.getLogger(__name__)
 
 # Глобальные переменные
 _whisper_model = None
@@ -18,20 +21,25 @@ def get_whisper():
     global _whisper_model
     with _whisper_lock:
         if _whisper_model is None:
+            logger.info("Initializing Faster-Whisper model (large-v3-turbo)...")
             _whisper_model = WhisperModel(
                 "h2oai/faster-whisper-large-v3-turbo",
                 device="cpu",
                 compute_type="int8",
                 cpu_threads=int(os.getenv("OMP_NUM_THREADS", 8))
             )
+            logger.info("Faster-Whisper model loaded successfully")
     return _whisper_model
 
 def get_emotion_model():
     global _emotion_model
     with _emotion_lock:
         if _emotion_model is None:
+            logger.info("Initializing GigaAMEmo model...")
+            # Предупреждение о fp16 обычно летит из gigaam.load_model при работе на CPU
             _emotion_model = gigaam.load_model('emo')
             _emotion_model.eval()
+            logger.info("GigaAMEmo model loaded successfully")
     return _emotion_model
 
 def get_llm():
@@ -39,12 +47,14 @@ def get_llm():
     with _llm_lock:
         if _llm is None:
             model_path = os.getenv("LLM_MODEL_PATH", "models/model-q4_K.gguf")
+            logger.info(f"Initializing Llama model from {model_path}...")
             _llm = Llama(
                 model_path=model_path,
                 n_ctx=4096,
                 n_threads=int(os.getenv("OMP_NUM_THREADS", 8)),
                 verbose=False
             )
+            logger.info("Llama model loaded successfully")
     return _llm
 
 class LockedLlama:

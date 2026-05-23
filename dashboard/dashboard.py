@@ -1,6 +1,11 @@
 import streamlit as st
 import pandas as pd
 import psycopg2
+import sys
+import os
+
+# Добавляем путь к src, чтобы найти config.py
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src'))
 from config import PG_CONFIG
 
 st.set_page_config(page_title="Call Analysis Dashboard")
