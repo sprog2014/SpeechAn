@@ -4,6 +4,7 @@ set MKL_NUM_THREADS=8
 set CT2_USE_EXPERIMENTAL_PACKED_GEMM=1
 
 pushd "%~dp0.."
+set PROJECT_ROOT=%CD%
 
 if exist venv\Scripts\activate.bat (
     call venv\Scripts\activate.bat
@@ -14,6 +15,7 @@ if exist venv\Scripts\activate.bat (
     exit /b 1
 )
 
+set PYTHONPATH=%PYTHONPATH%;%PROJECT_ROOT%\src
 py src/dispatcher.py
 
 popd
