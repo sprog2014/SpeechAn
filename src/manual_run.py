@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from config import RECORDS_ROOT, NUM_WORKERS
 from worker import process_file
 from models import get_whisper, get_emotion_model, get_llm
+from db_utils import get_system_running_status
 
 logging.basicConfig(
     level=logging.INFO,
@@ -74,6 +75,11 @@ def main():
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers) as executor:
         futures = []
         for f_path in files:
+            # Проверка флага остановки перед запуском очередного файла
+            if not get_system_running_status():
+                logger.info("System stop flag detected. Stopping manual run.")
+                break
+
             linkedid = os.path.splitext(os.path.basename(f_path))[0]
             logger.info(f"[{linkedid}] Submitting manual task")
             futures.append(executor.submit(process_file, f_path, prompt_id=args.prompt_id))

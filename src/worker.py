@@ -6,7 +6,8 @@ import time
 from db_utils import (
     fetch_call_metadata, upsert_call, set_call_done, set_call_error,
     insert_transcript, insert_emotion, insert_evaluation, get_pg_connection,
-    get_default_prompt, get_prompt_by_id, check_transcript_exists, check_evaluation_exists
+    get_default_prompt, get_prompt_by_id, check_transcript_exists, check_evaluation_exists,
+    set_processing_duration
 )
 from asr import transcribe_audio
 from emotion import predict_emotion
@@ -130,6 +131,7 @@ def process_file(file_path: str, prompt_id: int = None):
 
             set_call_done(linkedid, conn=pg_conn)
             duration_total = time.time() - start_total
+            set_processing_duration(linkedid, duration_total, conn=pg_conn)
             logger.info(f"[{linkedid}] --- Success! Total time: {duration_total:.2f}s ---")
 
     except Exception as e:
