@@ -55,29 +55,22 @@ def edit_prompt_dialog(prompt=None):
 
 prompts = get_all_prompts()
 if prompts:
-    # Подготовка данных для таблицы
-    # "Текст в строке is_default=true показывай жирным"
-    # В Streamlit dataframe/table это можно сделать через Style или просто добавив markdown,
-    # но st.dataframe плохо поддерживает markdown внутри ячеек для отображения.
-    # Используем column_config или просто преобразуем данные.
-
     display_data = []
     for p in prompts:
         name_display = f"**{p['name']}**" if p['is_default'] else p['name']
         display_data.append({
-            "ID": p['id'], # Скрытый или для справки
+            "ID": p['id'],
             "Создан": p['created_at'].strftime("%Y-%m-%d %H:%M") if p['created_at'] else "",
             "Название": name_display,
-            "_raw": p # Сохраняем оригинал для кнопок
+            "_raw": p
         })
 
     df_display = pd.DataFrame(display_data)
 
-    # "Строки таблицы должны быть выделяемыми без множественного выделения"
     selection = st.dataframe(
         df_display[["Создан", "Название"]],
         on_select="rerun",
-        selection_mode="single_row",
+        selection_mode="single-row",
         use_container_width=True,
         hide_index=True
     )
