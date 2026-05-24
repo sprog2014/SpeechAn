@@ -20,8 +20,22 @@ def scan_files():
     logger.debug("Scanning database for processed files...")
     try:
         with get_pg_connection() as conn:
+            # Получаем ID дефолтного промпта
             cur = conn.cursor()
-            cur.execute("SELECT linkedid FROM calls WHERE processing_status IN ('done','processing','error')")
+            cur.execute("SELECT id FROM prompts WHERE is_default = TRUE LIMIT 1")
+            row = cur.fetchone()
+            if not row:
+                logger.error("No default prompt found in DB")
+                return []
+            default_prompt_id = row[0]
+
+            # Ищем те, что уже имеют оценку с этим дефолтным промптом
+            # ИЛИ уже были обработаны/в процессе/с ошибкой (согласно статусу в calls)
+            cur.execute("""
+                SELECT linkedid FROM evaluations WHERE prompt_id = %s
+                UNION
+                SELECT linkedid FROM calls WHERE processing_status IN ('processing', 'done', 'error')
+            """, (default_prompt_id,))
             processed = set(row[0] for row in cur.fetchall())
     except Exception as e:
         logger.error(f"Error scanning DB: {e}")

@@ -37,16 +37,44 @@ CREATE TABLE speech_emotions (
 );
 CREATE INDEX idx_emotions_transcript ON speech_emotions(transcript_id);
 
+CREATE TABLE prompts (
+    id              SERIAL PRIMARY KEY,
+    name            VARCHAR(100) NOT NULL,
+    prompt_text     TEXT NOT NULL,
+    is_default      BOOLEAN DEFAULT FALSE,
+    created_at      TIMESTAMP DEFAULT now()
+);
+
+INSERT INTO prompts (name, prompt_text, is_default) VALUES (
+    'Default Medical Call Analysis',
+    'Ты — эксперт по контролю качества в медицинском колл-центре. Проанализируй диалог оператора и клиента и верни **только** JSON без лишних слов.
+Поля:
+- politeness_score: число от 0 до 10
+- client_sentiment: "positive", "neutral", "negative", "conflict"
+- call_purpose: "appointment", "consultation", "complaint", "cancel_appointment", "other"
+- call_summary: краткое содержание 1-2 предложения
+- checklist: объект с ключами: greeting, introduced_himself, identified_need, informed_price, agreed_datetime, handled_objection, farewell. Каждое поле true/false.
+- metrics: объект с дополнительной информацией, например, interruptions_count, hold_time_sec, medication_mentioned (true/false)
+
+Диалог:
+{transcript}
+',
+    TRUE
+);
+
 CREATE TABLE evaluations (
-    linkedid          VARCHAR(32) PRIMARY KEY REFERENCES calls(linkedid) ON DELETE CASCADE,
+    linkedid          VARCHAR(32) NOT NULL REFERENCES calls(linkedid) ON DELETE CASCADE,
+    prompt_id         INT NOT NULL REFERENCES prompts(id) ON DELETE CASCADE,
     politeness_score  REAL,
     client_sentiment  TEXT,
     call_purpose      TEXT,
     call_summary      TEXT,
     checklist_json    JSONB DEFAULT '{}',
     metrics_json      JSONB DEFAULT '{}',
-    created_at        TIMESTAMP DEFAULT now()
+    created_at        TIMESTAMP DEFAULT now(),
+    PRIMARY KEY (linkedid, prompt_id)
 );
 CREATE INDEX idx_evals_politeness ON evaluations(politeness_score);
 CREATE INDEX idx_evals_purpose ON evaluations(call_purpose);
 CREATE INDEX idx_evals_checklist_gin ON evaluations USING GIN (checklist_json);
+CREATE INDEX idx_evals_prompt_id ON evaluations(prompt_id);
