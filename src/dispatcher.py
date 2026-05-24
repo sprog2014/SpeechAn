@@ -29,6 +29,8 @@ def scan_files():
 
     logger.debug(f"Scanning directory: {RECORDS_ROOT}")
     files_to_process = []
+
+    # Итерируемся по иерархической структуре /YYYY/MM/DD/
     for root, dirs, files in os.walk(RECORDS_ROOT):
         for f in files:
             if f.lower().endswith('.mp3'):
