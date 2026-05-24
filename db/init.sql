@@ -15,6 +15,7 @@ CREATE TABLE calls (
     file_path       TEXT NOT NULL,
     processing_status TEXT NOT NULL DEFAULT 'new'
         CHECK (processing_status IN ('new','processing','done','error')),
+    processing_duration REAL,
     created_at      TIMESTAMP DEFAULT now()
 );
 
@@ -78,3 +79,11 @@ CREATE INDEX idx_evals_politeness ON evaluations(politeness_score);
 CREATE INDEX idx_evals_purpose ON evaluations(call_purpose);
 CREATE INDEX idx_evals_checklist_gin ON evaluations USING GIN (checklist_json);
 CREATE INDEX idx_evals_prompt_id ON evaluations(prompt_id);
+CREATE INDEX idx_calls_calldate ON calls(calldate);
+
+CREATE TABLE system_settings (
+    key VARCHAR(50) PRIMARY KEY,
+    value TEXT
+);
+
+INSERT INTO system_settings (key, value) VALUES ('is_running', 'true');

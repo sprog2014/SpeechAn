@@ -3,7 +3,7 @@ import time
 import logging
 import concurrent.futures
 from config import RECORDS_ROOT, NUM_WORKERS
-from db_utils import get_pg_connection
+from db_utils import get_pg_connection, get_system_running_status
 from worker import process_file
 
 # Настройка логирования диспетчера
@@ -75,6 +75,12 @@ def main():
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=NUM_WORKERS) as executor:
         while True:
+            # Проверка статуса запуска системы
+            if not get_system_running_status():
+                logger.info("System is in WAITING mode (is_running=false). Sleeping 10s.")
+                time.sleep(10)
+                continue
+
             current_active = len(processing_now)
             if current_active < NUM_WORKERS:
                 files = scan_files()

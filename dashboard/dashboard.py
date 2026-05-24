@@ -1,40 +1,50 @@
 import streamlit as st
-import pandas as pd
-import psycopg2
+import hmac
 import sys
 import os
 
-# Добавляем путь к src, чтобы найти config.py
+# Добавляем путь к src, чтобы найти config.py и db_utils.py
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src'))
-from config import PG_CONFIG
+from config import WEB_USER, WEB_PASSWORD
 
-st.set_page_config(page_title="Call Analysis Dashboard")
-st.title("Аналитика звонков")
+st.set_page_config(page_title="Speech Analytics", layout="wide")
 
-@st.cache_data(ttl=60)
-def get_summary_data():
-    conn = psycopg2.connect(**PG_CONFIG)
-    df = pd.read_sql("""
-        SELECT c.linkedid, c.calldate, c.direction, c.billsec, c.moduleparams,
-               e.politeness_score, e.client_sentiment, e.call_purpose,
-               e.checklist_json->>'greeting' as greeting,
-               e.checklist_json->>'farewell' as farewell
-        FROM calls c
-        LEFT JOIN evaluations e ON c.linkedid = e.linkedid
-        WHERE c.processing_status = 'done'
-        ORDER BY c.calldate DESC
-        LIMIT 500
-    """, conn)
-    conn.close()
-    return df
+def check_password():
+    """Returns `True` if the user had the correct password."""
 
-df = get_summary_data()
-st.dataframe(df)
+    def password_entered():
+        """Checks whether a password entered by the user is correct."""
+        if hmac.compare_digest(st.session_state["username"], WEB_USER) and \
+           hmac.compare_digest(st.session_state["password"], WEB_PASSWORD):
+            st.session_state["password_correct"] = True
+            del st.session_state["password"]  # Don't store the password.
+            del st.session_state["username"]
+        else:
+            st.session_state["password_correct"] = False
 
-st.subheader("Средняя вежливость")
-avg_politeness = df['politeness_score'].mean()
-st.metric("Средняя вежливость", f"{avg_politeness:.2f}")
+    # Return True if the passowrd is validated.
+    if st.session_state.get("password_correct", False):
+        return True
 
-st.subheader("Распределение целей звонков")
-purpose_counts = df['call_purpose'].value_counts()
-st.bar_chart(purpose_counts)
+    # Show input for username & password.
+    st.text_input("Username", key="username")
+    st.text_input("Password", type="password", key="password")
+    st.button("Log in", on_click=password_entered)
+
+    if "password_correct" in st.session_state:
+        st.error("😕 User not known or password incorrect")
+    return False
+
+if not check_password():
+    st.stop()
+
+st.title("Система анализа речи")
+st.write("Добро пожаловать в панель управления и мониторинга.")
+
+st.sidebar.success("Выберите раздел выше.")
+
+st.info("""
+Используйте боковое меню для перехода между разделами:
+- **Аналитика**: Просмотр результатов и графиков (бывший Dashboard)
+- **Настройки и Управление**: Управление промптами, запуск/остановка системы и ручная обработка.
+""")

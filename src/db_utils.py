@@ -108,6 +108,105 @@ def upsert_call(metadata, file_path, conn=None):
         with get_pg_connection() as conn:
             _execute(conn)
 
+def set_default_prompt(prompt_id, conn=None):
+    def _execute(c):
+        cur = c.cursor()
+        cur.execute("UPDATE prompts SET is_default = FALSE WHERE is_default = TRUE")
+        cur.execute("UPDATE prompts SET is_default = TRUE WHERE id = %s", (prompt_id,))
+        c.commit()
+
+    if conn:
+        _execute(conn)
+    else:
+        with get_pg_connection() as conn:
+            _execute(conn)
+
+def set_processing_duration(linkedid, duration, conn=None):
+    def _execute(c):
+        cur = c.cursor()
+        cur.execute("UPDATE calls SET processing_duration=%s WHERE linkedid=%s", (duration, linkedid))
+        c.commit()
+
+    if conn:
+        _execute(conn)
+    else:
+        with get_pg_connection() as conn:
+            _execute(conn)
+
+def get_system_running_status(conn=None):
+    def _execute(c):
+        cur = c.cursor()
+        cur.execute("SELECT value FROM system_settings WHERE key = 'is_running'")
+        row = cur.fetchone()
+        return row[0].lower() == 'true' if row else True
+
+    if conn:
+        return _execute(conn)
+    else:
+        with get_pg_connection() as conn:
+            return _execute(conn)
+
+def set_system_running_status(is_running, conn=None):
+    def _execute(c):
+        cur = c.cursor()
+        cur.execute("UPDATE system_settings SET value=%s WHERE key='is_running'", (str(is_running).lower(),))
+        c.commit()
+
+    if conn:
+        _execute(conn)
+    else:
+        with get_pg_connection() as conn:
+            _execute(conn)
+
+def get_all_prompts(conn=None):
+    def _execute(c):
+        cur = c.cursor(cursor_factory=RealDictCursor)
+        cur.execute("SELECT id, name, prompt_text, is_default, created_at FROM prompts ORDER BY id ASC")
+        return cur.fetchall()
+
+    if conn:
+        return _execute(conn)
+    else:
+        with get_pg_connection() as conn:
+            return _execute(conn)
+
+def upsert_prompt(name, prompt_text, is_default=False, prompt_id=None, conn=None):
+    def _execute(c):
+        cur = c.cursor()
+        if prompt_id:
+            if is_default:
+                cur.execute("UPDATE prompts SET is_default = FALSE WHERE is_default = TRUE")
+            cur.execute("""
+                UPDATE prompts SET name=%s, prompt_text=%s, is_default=%s
+                WHERE id=%s
+            """, (name, prompt_text, is_default, prompt_id))
+        else:
+            if is_default:
+                cur.execute("UPDATE prompts SET is_default = FALSE WHERE is_default = TRUE")
+            cur.execute("""
+                INSERT INTO prompts (name, prompt_text, is_default)
+                VALUES (%s, %s, %s)
+            """, (name, prompt_text, is_default))
+        c.commit()
+
+    if conn:
+        _execute(conn)
+    else:
+        with get_pg_connection() as conn:
+            _execute(conn)
+
+def delete_prompt(prompt_id, conn=None):
+    def _execute(c):
+        cur = c.cursor()
+        cur.execute("DELETE FROM prompts WHERE id=%s", (prompt_id,))
+        c.commit()
+
+    if conn:
+        _execute(conn)
+    else:
+        with get_pg_connection() as conn:
+            _execute(conn)
+
 def set_call_status(linkedid, status, conn=None):
     def _execute(c):
         cur = c.cursor()
