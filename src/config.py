@@ -1,7 +1,15 @@
 import os
+from pathlib import Path
+
+# Пытаемся загрузить .env из /opt/calls/.env или из текущей папки
 try:
     from dotenv import load_dotenv
-    load_dotenv()
+    # Сначала проверяем глобальный путь
+    global_env = Path("/opt/calls/.env")
+    if global_env.exists():
+        load_dotenv(dotenv_path=global_env)
+    else:
+        load_dotenv()
 except ImportError:
     pass
 
@@ -21,6 +29,6 @@ MYSQL_CONFIG = {
     "password": os.getenv("MYSQL_PASSWORD")
 }
 
-RECORDS_ROOT = os.getenv("RECORDS_ROOT", "/data/calls")
+RECORDS_ROOT = os.getenv("RECORDS_ROOT", "/mnt/rec")
 NUM_WORKERS = int(os.getenv("NUM_WORKERS", 10))
 OMP_NUM_THREADS = os.getenv("OMP_NUM_THREADS", "8")
