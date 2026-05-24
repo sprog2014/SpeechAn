@@ -108,6 +108,19 @@ def upsert_call(metadata, file_path, conn=None):
         with get_pg_connection() as conn:
             _execute(conn)
 
+def set_default_prompt(prompt_id, conn=None):
+    def _execute(c):
+        cur = c.cursor()
+        cur.execute("UPDATE prompts SET is_default = FALSE WHERE is_default = TRUE")
+        cur.execute("UPDATE prompts SET is_default = TRUE WHERE id = %s", (prompt_id,))
+        c.commit()
+
+    if conn:
+        _execute(conn)
+    else:
+        with get_pg_connection() as conn:
+            _execute(conn)
+
 def set_processing_duration(linkedid, duration, conn=None):
     def _execute(c):
         cur = c.cursor()
