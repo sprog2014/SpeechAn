@@ -18,12 +18,13 @@ PROMPT_TEMPLATE = """Ты — эксперт по контролю качест�
 {transcript}
 """
 
-def analyze_transcript(transcript_text: str) -> dict:
+def analyze_transcript(transcript_text: str, prompt_template: str = None) -> dict:
     start_time = time.time()
     logger.info("Sending transcript to LLM for analysis...")
 
     llm = get_locked_llm()
-    prompt = PROMPT_TEMPLATE.format(transcript=transcript_text)
+    template = prompt_template if prompt_template else PROMPT_TEMPLATE
+    prompt = template.format(transcript=transcript_text)
     output = llm.create_completion(prompt, max_tokens=500, temperature=0.1)
     response = output['choices'][0]['text']
 

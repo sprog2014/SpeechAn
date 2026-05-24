@@ -159,14 +159,62 @@ def insert_emotion(transcript_id, emotion, confidence, conn=None):
         with get_pg_connection() as conn:
             _execute(conn)
 
-def insert_evaluation(linkedid, result_json, conn=None):
+def get_default_prompt(conn=None):
+    def _execute(c):
+        cur = c.cursor(cursor_factory=RealDictCursor)
+        cur.execute("SELECT id, prompt_text FROM prompts WHERE is_default = TRUE LIMIT 1")
+        return cur.fetchone()
+
+    if conn:
+        return _execute(conn)
+    else:
+        with get_pg_connection() as conn:
+            return _execute(conn)
+
+def get_prompt_by_id(prompt_id, conn=None):
+    def _execute(c):
+        cur = c.cursor(cursor_factory=RealDictCursor)
+        cur.execute("SELECT id, prompt_text FROM prompts WHERE id = %s", (prompt_id,))
+        return cur.fetchone()
+
+    if conn:
+        return _execute(conn)
+    else:
+        with get_pg_connection() as conn:
+            return _execute(conn)
+
+def check_transcript_exists(linkedid, conn=None):
+    def _execute(c):
+        cur = c.cursor()
+        cur.execute("SELECT 1 FROM transcripts WHERE linkedid = %s LIMIT 1", (linkedid,))
+        return cur.fetchone() is not None
+
+    if conn:
+        return _execute(conn)
+    else:
+        with get_pg_connection() as conn:
+            return _execute(conn)
+
+def check_evaluation_exists(linkedid, prompt_id, conn=None):
+    def _execute(c):
+        cur = c.cursor()
+        cur.execute("SELECT 1 FROM evaluations WHERE linkedid = %s AND prompt_id = %s LIMIT 1", (linkedid, prompt_id))
+        return cur.fetchone() is not None
+
+    if conn:
+        return _execute(conn)
+    else:
+        with get_pg_connection() as conn:
+            return _execute(conn)
+
+def insert_evaluation(linkedid, prompt_id, result_json, conn=None):
     def _execute(c):
         cur = c.cursor()
         cur.execute("""
-            INSERT INTO evaluations (linkedid, politeness_score, client_sentiment,
+            INSERT INTO evaluations (linkedid, prompt_id, politeness_score, client_sentiment,
                                      call_purpose, call_summary, checklist_json, metrics_json)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (linkedid) DO UPDATE SET
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (linkedid, prompt_id) DO UPDATE SET
                 politeness_score = EXCLUDED.politeness_score,
                 client_sentiment = EXCLUDED.client_sentiment,
                 call_purpose = EXCLUDED.call_purpose,
@@ -175,6 +223,7 @@ def insert_evaluation(linkedid, result_json, conn=None):
                 metrics_json = EXCLUDED.metrics_json
         """, (
             linkedid,
+            prompt_id,
             result_json.get('politeness_score'),
             result_json.get('client_sentiment'),
             result_json.get('call_purpose'),
