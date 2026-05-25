@@ -6,7 +6,7 @@ BASE_DIR="/opt/calls"
 REPO_URL="https://github.com/user/SpeechAn.git"
 DB_NAME="call_analysis"
 DB_USER="analyzer"
-DB_PASS="secure_password"
+DB_PASS="]=[-p0o"
 LLAMA_MODEL_URL="https://huggingface.co/IlyaGusev/saiga_llama3_8b_gguf/resolve/main/model-q4_K.gguf"
 
 echo "=== Speech Analytics Global Setup Script ==="
@@ -66,11 +66,11 @@ PG_DB=$DB_NAME
 PG_USER=$DB_USER
 PG_PASSWORD=$DB_PASS
 
-MYSQL_HOST=your_mysql_host
+MYSQL_HOST=172.16.1.7
 MYSQL_PORT=3306
-MYSQL_DB=asterisk
-MYSQL_USER=readonly
-MYSQL_PASSWORD=readonly_password
+MYSQL_DB=pbxanalytics
+MYSQL_USER=umc
+MYSQL_PASSWORD=umc2pbx
 
 RECORDS_ROOT=/mnt/rec
 NUM_WORKERS=10
