@@ -3,7 +3,7 @@ set -e
 
 # Настройки
 BASE_DIR="/opt/calls"
-REPO_URL="https://github.com/user/SpeechAn.git"
+REPO_URL="https://github.com/sprog2014/SpeechAn.git"
 DB_NAME="call_analysis"
 DB_USER="analyzer"
 DB_PASS="]=[-p0o"
