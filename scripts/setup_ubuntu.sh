@@ -20,10 +20,7 @@ sudo apt install -y git ffmpeg default-mysql-client postgresql postgresql-contri
 echo "[2/7] Installing Python 3.14..."
 sudo add-apt-repository -y ppa:deadsnakes/ppa
 sudo apt update
-sudo apt install -y python3.14
-
-# Установка pip для 3.14
-curl -sS https://bootstrap.pypa.io/get-pip.py | sudo python3.14
+sudo apt install -y python3.14 python3-pip
 
 # 3. Структура папок
 echo "[3/7] Creating directory structure..."
