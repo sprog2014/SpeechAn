@@ -1,7 +1,7 @@
 faster-whisper
 pydub
 gigaam
-torch
+torch<=2.5.1
 torchaudio
 llama-cpp-python
 psycopg2-binary
