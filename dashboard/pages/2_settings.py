@@ -93,7 +93,7 @@ else:
             use_container_width=True,
             hide_index=True,
             column_config={
-                "Название": st.column_config.TextColumn("Название", help="Жирным выделен промпт по умолчанию", markdown=True)
+            "Название": st.column_config.TextColumn("Название", help="Жирным выделен промпт по умолчанию")
             }
         )
 

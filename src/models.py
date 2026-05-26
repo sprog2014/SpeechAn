@@ -1,9 +1,13 @@
 import os
 import threading
 import logging
+import warnings
 import gigaam
 from faster_whisper import WhisperModel
 from llama_cpp import Llama
+
+# Подавляем FutureWarning от torch/gigaam
+warnings.filterwarnings("ignore", category=FutureWarning)
 
 logger = logging.getLogger(__name__)
 
@@ -22,13 +26,17 @@ def get_whisper():
     with _whisper_lock:
         if _whisper_model is None:
             logger.info("Initializing Faster-Whisper model (large-v3-turbo)...")
-            _whisper_model = WhisperModel(
-                "h2oai/faster-whisper-large-v3-turbo",
-                device="cpu",
-                compute_type="int8",
-                cpu_threads=int(os.getenv("OMP_NUM_THREADS", 8))
-            )
-            logger.info("Faster-Whisper model loaded successfully")
+            try:
+                _whisper_model = WhisperModel(
+                    "h2oai/faster-whisper-large-v3-turbo",
+                    device="cpu",
+                    compute_type="int8",
+                    cpu_threads=int(os.getenv("OMP_NUM_THREADS", 8))
+                )
+                logger.info("Faster-Whisper model loaded successfully")
+            except Exception as e:
+                logger.error(f"Failed to load Faster-Whisper model: {e}")
+                raise
     return _whisper_model
 
 def get_emotion_model():
@@ -36,10 +44,14 @@ def get_emotion_model():
     with _emotion_lock:
         if _emotion_model is None:
             logger.info("Initializing GigaAMEmo model...")
-            # Предупреждение о fp16 обычно летит из gigaam.load_model при работе на CPU
-            _emotion_model = gigaam.load_model('emo')
-            _emotion_model.eval()
-            logger.info("GigaAMEmo model loaded successfully")
+            try:
+                # Предупреждение о fp16 обычно летит из gigaam.load_model при работе на CPU
+                _emotion_model = gigaam.load_model('emo')
+                _emotion_model.eval()
+                logger.info("GigaAMEmo model loaded successfully")
+            except Exception as e:
+                logger.error(f"Failed to load GigaAMEmo model: {e}")
+                raise
     return _emotion_model
 
 def get_llm():
@@ -48,13 +60,17 @@ def get_llm():
         if _llm is None:
             model_path = os.getenv("LLM_MODEL_PATH", "models/model-q4_K.gguf")
             logger.info(f"Initializing Llama model from {model_path}...")
-            _llm = Llama(
-                model_path=model_path,
-                n_ctx=4096,
-                n_threads=int(os.getenv("OMP_NUM_THREADS", 8)),
-                verbose=False
-            )
-            logger.info("Llama model loaded successfully")
+            try:
+                _llm = Llama(
+                    model_path=model_path,
+                    n_ctx=4096,
+                    n_threads=int(os.getenv("OMP_NUM_THREADS", 8)),
+                    verbose=False
+                )
+                logger.info("Llama model loaded successfully")
+            except Exception as e:
+                logger.error(f"Failed to load Llama model: {e}")
+                raise
     return _llm
 
 class LockedLlama:
