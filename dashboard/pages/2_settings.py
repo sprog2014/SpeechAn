@@ -39,72 +39,97 @@ else:
 # --- Раздел 2: Управление промптами ---
 st.header("Управление промптами")
 
-@st.dialog("Редактирование промпта")
-def edit_prompt_dialog(prompt=None):
-    p_id = prompt['id'] if prompt else None
-    name = st.text_input("Название", value=prompt['name'] if prompt else "")
-    text = st.text_area("Текст промпта", value=prompt['prompt_text'] if prompt else "", height=300)
-
-    if st.button("Сохранить"):
-        if name and text:
-            upsert_prompt(name, text, is_default=prompt['is_default'] if prompt else False, prompt_id=p_id)
-            st.success("Сохранено!")
-            st.rerun()
-        else:
-            st.error("Название и текст не могут быть пустыми.")
+# Инициализация состояния для редактора
+if "show_editor" not in st.session_state:
+    st.session_state.show_editor = False
+if "editing_prompt" not in st.session_state:
+    st.session_state.editing_prompt = None
 
 prompts = get_all_prompts()
-if prompts:
-    display_data = []
-    for p in prompts:
-        name_display = f"**{p['name']}**" if p['is_default'] else p['name']
-        display_data.append({
-            "ID": p['id'],
-            "Создан": p['created_at'].strftime("%Y-%m-%d %H:%M") if p['created_at'] else "",
-            "Название": name_display,
-            "_raw": p
-        })
 
-    df_display = pd.DataFrame(display_data)
+if st.session_state.show_editor:
+    st.subheader("Редактирование промпта")
+    prompt = st.session_state.editing_prompt
+    p_id = prompt['id'] if prompt else None
 
-    selection = st.dataframe(
-        df_display[["Создан", "Название"]],
-        on_select="rerun",
-        selection_mode="single_row",
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "Название": st.column_config.TextColumn("Название", help="Жирным выделен промпт по умолчанию", markdown=True)
-        }
-    )
+    with st.form("edit_prompt_form"):
+        name = st.text_input("Название", value=prompt['name'] if prompt else "")
+        text = st.text_area("Текст промпта", value=prompt['prompt_text'] if prompt else "", height=300)
 
-    selected_indices = selection.get("selection", {}).get("rows", [])
-    selected_prompt = None
-    if selected_indices:
-        selected_prompt = display_data[selected_indices[0]]["_raw"]
+        col_f1, col_f2 = st.columns(2)
+        save_btn = col_f1.form_submit_button("Сохранить")
+        cancel_btn = col_f2.form_submit_button("Отмена")
 
-    col1, col2, col3 = st.columns(3)
+        if save_btn:
+            if name and text:
+                upsert_prompt(name, text, is_default=prompt['is_default'] if prompt else False, prompt_id=p_id)
+                st.success("Сохранено!")
+                st.session_state.show_editor = False
+                st.session_state.editing_prompt = None
+                st.rerun()
+            else:
+                st.error("Название и текст не могут быть пустыми.")
 
-    if col1.button("Добавить", use_container_width=True):
-        edit_prompt_dialog()
-
-    if col2.button("Изменить", use_container_width=True, disabled=selected_prompt is None):
-        edit_prompt_dialog(selected_prompt)
-
-    if col3.button("По умолчанию", use_container_width=True, disabled=selected_prompt is None):
-        set_default_prompt(selected_prompt['id'])
-        st.success(f"Промпт '{selected_prompt['name']}' установлен по умолчанию.")
-        st.rerun()
-
-    if selected_prompt:
-        if st.button("Удалить выбранный промпт", type="primary"):
-            delete_prompt(selected_prompt['id'])
-            st.success("Удалено!")
+        if cancel_btn:
+            st.session_state.show_editor = False
+            st.session_state.editing_prompt = None
             st.rerun()
 else:
-    st.info("Промпты не найдены.")
-    if st.button("Добавить первый промпт"):
-        edit_prompt_dialog()
+    if prompts:
+        display_data = []
+        for p in prompts:
+            name_display = f"**{p['name']}**" if p['is_default'] else p['name']
+            display_data.append({
+                "ID": p['id'],
+                "Создан": p['created_at'].strftime("%Y-%m-%d %H:%M") if p['created_at'] else "",
+                "Название": name_display,
+                "_raw": p
+            })
+
+        df_display = pd.DataFrame(display_data)
+
+        st.dataframe(
+            df_display[["Создан", "Название"]],
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Название": st.column_config.TextColumn("Название", help="Жирным выделен промпт по умолчанию", markdown=True)
+            }
+        )
+
+        prompt_options = {p['id']: p['name'] for p in prompts}
+        selected_prompt_id = st.selectbox("Выберите промпт для действий", options=list(prompt_options.keys()), format_func=lambda x: prompt_options[x])
+
+        selected_prompt = next((p for p in prompts if p['id'] == selected_prompt_id), None)
+
+        col1, col2, col3 = st.columns(3)
+
+        if col1.button("Добавить новый", use_container_width=True):
+            st.session_state.show_editor = True
+            st.session_state.editing_prompt = None
+            st.rerun()
+
+        if col2.button("Изменить выбранный", use_container_width=True, disabled=selected_prompt is None):
+            st.session_state.show_editor = True
+            st.session_state.editing_prompt = selected_prompt
+            st.rerun()
+
+        if col3.button("Сделать по умолчанию", use_container_width=True, disabled=selected_prompt is None):
+            set_default_prompt(selected_prompt['id'])
+            st.success(f"Промпт '{selected_prompt['name']}' установлен по умолчанию.")
+            st.rerun()
+
+        if selected_prompt:
+            if st.button("Удалить выбранный промпт", type="primary"):
+                delete_prompt(selected_prompt['id'])
+                st.success("Удалено!")
+                st.rerun()
+    else:
+        st.info("Промпты не найдены.")
+        if st.button("Добавить первый промпт"):
+            st.session_state.show_editor = True
+            st.session_state.editing_prompt = None
+            st.rerun()
 
 # --- Раздел 3: Статистика ---
 st.header("Статистика обработки")
@@ -147,21 +172,24 @@ with st.form("manual_run_form"):
     date_start = st.date_input("Дата начала", datetime.now() - timedelta(days=1))
     date_end = st.date_input("Дата конца", datetime.now())
 
-    prompt_options = {p['id']: p['name'] for p in prompts}
+    prompt_options = {p['id']: p['name'] for p in prompts} if prompts else {}
     selected_manual_prompt = st.selectbox("Промпт", options=list(prompt_options.keys()), format_func=lambda x: prompt_options[x])
 
     submit_manual = st.form_submit_button("Запустить повторную обработку")
 
     if submit_manual:
-        cmd = [
-            "python3", "src/manual_run.py",
-            date_start.strftime("%Y-%m-%d"),
-            date_end.strftime("%Y-%m-%d"),
-            "--prompt_id", str(selected_manual_prompt)
-        ]
-        # Не используем PIPE, чтобы избежать зависаний при переполнении буфера
-        process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        st.info(f"Процесс ручного запуска инициирован (PID: {process.pid}).")
+        if selected_manual_prompt:
+            cmd = [
+                "python3", "src/manual_run.py",
+                date_start.strftime("%Y-%m-%d"),
+                date_end.strftime("%Y-%m-%d"),
+                "--prompt_id", str(selected_manual_prompt)
+            ]
+            # Не используем PIPE, чтобы избежать зависаний при переполнении буфера
+            process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            st.info(f"Процесс ручного запуска инициирован (PID: {process.pid}).")
+        else:
+            st.error("Выберите промпт для запуска.")
 
 if st.button("Перейти к Аналитике"):
     st.switch_page("pages/1_analytics.py")
