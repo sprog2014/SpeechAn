@@ -76,6 +76,9 @@ RECORDS_ROOT=/mnt/rec
 NUM_WORKERS=10
 OMP_NUM_THREADS=8
 LLM_MODEL_PATH=$BASE_DIR/models/model-q4_K.gguf
+
+WEB_USER=admin
+WEB_PASSWORD=admin
 EOF
     echo ".env created in $BASE_DIR/.env"
 fi
