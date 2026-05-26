@@ -7,4 +7,4 @@ PROJECT_ROOT="$SCRIPT_DIR/.."
 cd "$PROJECT_ROOT"
 
 export PYTHONPATH=$PYTHONPATH:$PROJECT_ROOT:$PROJECT_ROOT/src
-python3.14 src/worker.py "$@"
+python3 src/worker.py "$@"

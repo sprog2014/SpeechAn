@@ -16,11 +16,18 @@ echo "[1/7] Installing system dependencies..."
 sudo apt update
 sudo apt install -y git ffmpeg default-mysql-client postgresql postgresql-contrib build-essential software-properties-common wget curl
 
-# 2. Python 3.14
-echo "[2/7] Installing Python 3.14..."
+# 2. Python 3.12
+echo "[2/7] Installing Python 3.12..."
 sudo add-apt-repository -y ppa:deadsnakes/ppa
 sudo apt update
-sudo apt install -y python3.14 python3-pip
+sudo apt install -y python3.12 python3.12-dev python3-pip
+
+# Set python3.12 as default python3
+sudo update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1
+sudo update-alternatives --set python3 /usr/bin/python3.12
+
+# Ensure pip is working for python3.12
+sudo python3 -m pip install --upgrade pip
 
 # 3. Структура папок
 echo "[3/7] Creating directory structure..."
@@ -50,7 +57,7 @@ PGPASSWORD=$DB_PASS psql -h localhost -U $DB_USER -d $DB_NAME -f $BASE_DIR/Speec
 
 # 6. Глобальная установка зависимостей Python
 echo "[6/7] Installing Python dependencies globally..."
-sudo python3.14 -m pip install -r $BASE_DIR/SpeechAn/requirements.txt
+sudo python3 -m pip install -r $BASE_DIR/SpeechAn/requirements.txt
 
 # 7. Загрузка модели и создание конфига
 echo "[7/7] Setup assets and config..."

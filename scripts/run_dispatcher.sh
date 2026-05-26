@@ -8,4 +8,4 @@ cd "$PROJECT_ROOT"
 
 # PYTHONPATH теперь включает и текущую папку и src
 export PYTHONPATH=$PYTHONPATH:$PROJECT_ROOT:$PROJECT_ROOT/src
-python3.14 src/dispatcher.py
+python3 src/dispatcher.py
