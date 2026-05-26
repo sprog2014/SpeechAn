@@ -27,7 +27,7 @@ sudo update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 
 sudo update-alternatives --set python3 /usr/bin/python3.12
 
 # Ensure pip is working for python3.12
-sudo python3 -m pip install --upgrade pip
+sudo python3 -m pip install --upgrade pip --break-system-packages
 
 # 3. Структура папок
 echo "[3/7] Creating directory structure..."
@@ -57,7 +57,7 @@ PGPASSWORD=$DB_PASS psql -h localhost -U $DB_USER -d $DB_NAME -f $BASE_DIR/Speec
 
 # 6. Глобальная установка зависимостей Python
 echo "[6/7] Installing Python dependencies globally..."
-sudo python3 -m pip install -r $BASE_DIR/SpeechAn/requirements.txt
+sudo python3 -m pip install -r $BASE_DIR/SpeechAn/requirements.txt --break-system-packages
 
 # 7. Загрузка модели и создание конфига
 echo "[7/7] Setup assets and config..."
