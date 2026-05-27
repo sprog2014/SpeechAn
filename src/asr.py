@@ -10,7 +10,14 @@ def transcribe_audio(audio_path: str, language: str = "ru"):
     logger.info(f"Starting transcription for {audio_path}")
 
     model = get_whisper()
-    segments, info = model.transcribe(audio_path, language=language, beam_size=5)
+    # vad_filter=True обеспечивает абсолютные таймстампы от начала файла
+    segments, info = model.transcribe(
+        audio_path,
+        language=language,
+        beam_size=5,
+        vad_filter=True,
+        vad_parameters=dict(min_silence_duration_ms=500)
+    )
 
     result = []
     for seg in segments:
