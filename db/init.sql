@@ -22,7 +22,7 @@ CREATE TABLE calls (
     incomingtrunk   VARCHAR(80),
     file_path       TEXT NOT NULL,
     processing_status TEXT NOT NULL DEFAULT 'new'
-        CHECK (processing_status IN ('new','processing','done','error')),
+        CHECK (processing_status IN ('new','processing','done','error','skipped')),
     processing_duration REAL,
     created_at      TIMESTAMP DEFAULT now()
 );
@@ -120,3 +120,13 @@ CREATE TABLE phones (
     name   VARCHAR(200),
     use    BOOLEAN DEFAULT TRUE
 );
+
+CREATE TABLE processing_stats (
+    linkedid        VARCHAR(32) PRIMARY KEY REFERENCES calls(linkedid) ON DELETE CASCADE,
+    asr_duration    REAL,
+    emotion_duration REAL,
+    llm_duration    REAL,
+    total_duration  REAL,
+    created_at      TIMESTAMP DEFAULT now()
+);
+CREATE INDEX idx_stats_created_at ON processing_stats(created_at);
