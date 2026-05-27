@@ -208,12 +208,12 @@ def set_processing_duration(linkedid, duration, conn=None):
         with get_pg_connection() as conn:
             _execute(conn)
 
-def get_system_running_status(conn=None):
+def get_system_setting(key, default='false', conn=None):
     def _execute(c):
         cur = c.cursor()
-        cur.execute("SELECT value FROM system_settings WHERE key = 'is_running'")
+        cur.execute("SELECT value FROM system_settings WHERE key = %s", (key,))
         row = cur.fetchone()
-        return row[0].lower() == 'true' if row else True
+        return row[0] if row else default
 
     if conn:
         return _execute(conn)
@@ -221,10 +221,14 @@ def get_system_running_status(conn=None):
         with get_pg_connection() as conn:
             return _execute(conn)
 
-def set_system_running_status(is_running, conn=None):
+def set_system_setting(key, value, conn=None):
     def _execute(c):
         cur = c.cursor()
-        cur.execute("UPDATE system_settings SET value=%s WHERE key='is_running'", (str(is_running).lower(),))
+        cur.execute("""
+            INSERT INTO system_settings (key, value)
+            VALUES (%s, %s)
+            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+        """, (key, str(value).lower()))
         c.commit()
 
     if conn:
@@ -233,11 +237,32 @@ def set_system_running_status(is_running, conn=None):
         with get_pg_connection() as conn:
             _execute(conn)
 
+def get_system_running_status(conn=None):
+    val = get_system_setting('is_running', default='true', conn=conn)
+    return val.lower() == 'true'
+
+def set_system_running_status(is_running, conn=None):
+    set_system_setting('is_running', is_running, conn=conn)
+
 def get_all_prompts(conn=None):
     def _execute(c):
         cur = c.cursor(cursor_factory=RealDictCursor)
         cur.execute("SELECT id, name, prompt_text, is_default, created_at FROM prompts ORDER BY id ASC")
         return cur.fetchall()
+
+    if conn:
+        return _execute(conn)
+    else:
+        with get_pg_connection() as conn:
+            return _execute(conn)
+
+def is_phone_registered(number, conn=None):
+    if not number:
+        return False
+    def _execute(c):
+        cur = c.cursor()
+        cur.execute("SELECT 1 FROM phones WHERE number = %s", (number,))
+        return cur.fetchone() is not None
 
     if conn:
         return _execute(conn)

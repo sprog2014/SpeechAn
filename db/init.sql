@@ -87,6 +87,7 @@ CREATE TABLE system_settings (
 );
 
 INSERT INTO system_settings (key, value) VALUES ('is_running', 'true');
+INSERT INTO system_settings (key, value) VALUES ('skip_local_calls', 'false');
 
 CREATE TABLE phones (
     number VARCHAR(40) PRIMARY KEY,

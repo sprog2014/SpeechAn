@@ -10,7 +10,8 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src'))
 from db_utils import (
     get_system_running_status, set_system_running_status,
     get_all_prompts, upsert_prompt, delete_prompt, set_default_prompt,
-    get_pg_connection, get_all_phones, update_phone_use, sync_phones_from_external_db
+    get_pg_connection, get_all_phones, update_phone_use, sync_phones_from_external_db,
+    get_system_setting, set_system_setting
 )
 from config import PG_CONFIG
 
@@ -193,6 +194,16 @@ with st.form("manual_run_form"):
 
 # --- Раздел 5: Телефонный справочник ---
 st.header("Телефонный справочник")
+
+skip_local = get_system_setting('skip_local_calls', 'false').lower() == 'true'
+if st.checkbox("Пропускать анализ локальных звонков", value=skip_local):
+    if not skip_local:
+        set_system_setting('skip_local_calls', 'true')
+        st.rerun()
+else:
+    if skip_local:
+        set_system_setting('skip_local_calls', 'false')
+        st.rerun()
 
 phones_list = get_all_phones()
 if phones_list:
