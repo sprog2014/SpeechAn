@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
-from db_utils import get_processing_statistics
+from db_utils import get_processing_statistics, get_prompt_usage_statistics
 import plotly.express as px
 import plotly.graph_objects as go
 
@@ -42,10 +42,18 @@ else:
 
         # 2. График по дням
         st.subheader("Статистика по дням")
+
+        # Переименовываем столбцы для легенды
+        df_plot_daily = df_daily.rename(columns={
+            'processed': 'Обработано',
+            'skipped': 'Пропущено',
+            'waiting': 'В ожидании'
+        })
+
         fig_daily = px.bar(
-            df_daily,
+            df_plot_daily,
             x='date',
-            y=['processed', 'skipped', 'waiting'],
+            y=['Обработано', 'Пропущено', 'В ожидании'],
             title="Статус обработки по дням",
             labels={'value': 'Количество', 'date': 'Дата', 'variable': 'Статус'},
             barmode='stack'
@@ -53,7 +61,49 @@ else:
         st.plotly_chart(fig_daily, use_container_width=True)
 
         # Таблица данных
-        st.dataframe(df_daily, use_container_width=True)
+        st.dataframe(
+            df_daily,
+            use_container_width=True,
+            column_config={
+                "date": "Дата",
+                "total": "Всего",
+                "skipped": "Пропущено",
+                "processed": "Обработано",
+                "waiting": "В ожидании",
+                "avg_duration": "Среднее время (сек)",
+                "total_duration": "Общее время (сек)"
+            }
+        )
+
+        st.divider()
+
+        # 2.5 Использование промптов
+        st.subheader("Использование промптов")
+        prompt_usage = get_prompt_usage_statistics()
+        if prompt_usage:
+            df_prompts = pd.DataFrame(prompt_usage)
+            # Переименовываем для круговой диаграммы
+            df_prompts_plot = df_prompts.rename(columns={'name': 'Название промпта', 'count': 'Кол-во использований'})
+
+            fig_prompts = px.pie(
+                df_prompts_plot,
+                values='Кол-во использований',
+                names='Название промпта',
+                title="Распределение использования промптов"
+            )
+
+            pc1, pc2 = st.columns([1, 1])
+            with pc1:
+                st.plotly_chart(fig_prompts, use_container_width=True)
+            with pc2:
+                st.dataframe(
+                    df_prompts,
+                    use_container_width=True,
+                    column_config={"name": "Название промпта", "count": "Использовано раз"},
+                    hide_index=True
+                )
+        else:
+            st.info("Нет данных об использовании промптов")
 
         st.divider()
 

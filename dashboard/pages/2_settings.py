@@ -132,42 +132,7 @@ else:
             st.session_state.editing_prompt = None
             st.rerun()
 
-# --- Раздел 3: Статистика ---
-st.header("Статистика обработки")
-
-@st.cache_data(ttl=60)
-def get_stats():
-    with get_pg_connection() as conn:
-        df_stats = pd.read_sql("""
-            SELECT
-                DATE(calldate) as "Дата",
-                COUNT(*) as "Кол-во звонков",
-                ROUND(AVG(processing_duration)::numeric, 2) as "Среднее время (сек)",
-                ROUND(SUM(processing_duration)::numeric, 2) as "Общее время (сек)"
-            FROM calls
-            WHERE processing_status = 'done'
-            GROUP BY DATE(calldate)
-            ORDER BY DATE(calldate) DESC
-        """, conn)
-
-        df_prompts_stats = pd.read_sql("""
-            SELECT p.name as "Название промпта", COUNT(e.linkedid) as "Использовано раз"
-            FROM prompts p
-            LEFT JOIN evaluations e ON p.id = e.prompt_id
-            GROUP BY p.name
-        """, conn)
-
-    return df_stats, df_prompts_stats
-
-df_stats, df_prompts_stats = get_stats()
-
-st.subheader("По дням")
-st.dataframe(df_stats, use_container_width=True)
-
-st.subheader("Использование промптов")
-st.dataframe(df_prompts_stats, use_container_width=True)
-
-# --- Раздел 4: Ручной запуск ---
+# --- Раздел 3: Ручной запуск ---
 st.header("Ручной запуск")
 with st.form("manual_run_form"):
     date_start = st.date_input("Дата начала", datetime.now() - timedelta(days=1))
@@ -193,7 +158,7 @@ with st.form("manual_run_form"):
         else:
             st.error("Выберите промпт для запуска.")
 
-# --- Раздел 5: Телефонный справочник ---
+# --- Раздел 4: Телефонный справочник ---
 st.header("Телефонный справочник")
 
 skip_local = get_system_setting('skip_local_calls', 'false').lower() == 'true'
