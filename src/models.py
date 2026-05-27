@@ -3,8 +3,9 @@ import threading
 import logging
 import warnings
 import gigaam
-from faster_whisper import WhisperModel
+import torch
 from llama_cpp import Llama
+from queue import Queue, Empty
 
 # Подавляем FutureWarning от torch/gigaam
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -12,32 +13,25 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 logger = logging.getLogger(__name__)
 
 # Глобальные переменные
-_whisper_model = None
-_whisper_lock = threading.Lock()
+_asr_model = None
+_asr_lock = threading.Lock()
 
 _emotion_model = None
 _emotion_lock = threading.Lock()
 
-_llm = None
-_llm_lock = threading.Lock()
-
-def get_whisper():
-    global _whisper_model
-    with _whisper_lock:
-        if _whisper_model is None:
-            logger.info("Initializing Faster-Whisper model (large-v3-turbo)...")
+def get_asr_model():
+    global _asr_model
+    with _asr_lock:
+        if _asr_model is None:
+            model_name = "v3_e2e_ctc"
+            logger.info(f"Initializing GigaAM ASR model ({model_name})...")
             try:
-                _whisper_model = WhisperModel(
-                    "h2oai/faster-whisper-large-v3-turbo",
-                    device="cpu",
-                    compute_type="int8",
-                    cpu_threads=int(os.getenv("OMP_NUM_THREADS", 8))
-                )
-                logger.info("Faster-Whisper model loaded successfully")
+                _asr_model = gigaam.load_model(model_name)
+                logger.info("GigaAM ASR model loaded successfully")
             except Exception as e:
-                logger.error(f"Failed to load Faster-Whisper model: {e}")
+                logger.error(f"Failed to load GigaAM ASR model: {e}")
                 raise
-    return _whisper_model
+    return _asr_model
 
 def get_emotion_model():
     global _emotion_model
@@ -45,7 +39,6 @@ def get_emotion_model():
         if _emotion_model is None:
             logger.info("Initializing GigaAMEmo model...")
             try:
-                # Предупреждение о fp16 обычно летит из gigaam.load_model при работе на CPU
                 _emotion_model = gigaam.load_model('emo')
                 _emotion_model.eval()
                 logger.info("GigaAMEmo model loaded successfully")
@@ -54,46 +47,93 @@ def get_emotion_model():
                 raise
     return _emotion_model
 
-def get_llm():
-    global _llm
-    with _llm_lock:
-        if _llm is None:
-            model_path = os.getenv("LLM_MODEL_PATH", "models/model-q4_K.gguf")
-            logger.info(f"Initializing Llama model from {model_path}...")
-            try:
-                _llm = Llama(
-                    model_path=model_path,
-                    n_ctx=4096,
-                    n_threads=int(os.getenv("OMP_NUM_THREADS", 8)),
-                    # Указываем формат чата, если необходимо. Для Llama 3 обычно используется "llama-3"
+class LlamaPool:
+    def __init__(self, model_path, n_instances=10, n_ctx=4096, n_threads=8):
+        self.model_path = model_path
+        self.n_instances = n_instances
+        self.n_ctx = n_ctx
+        self.n_threads = n_threads
+        self.pool = Queue()
+        self._lock = threading.Lock()
+        self._initialized = False
+
+    def _initialize(self):
+        with self._lock:
+            if self._initialized:
+                return
+            logger.info(f"Initializing LlamaPool with {self.n_instances} instances...")
+            for i in range(self.n_instances):
+                logger.info(f"Loading Llama instance {i+1}/{self.n_instances}...")
+                model = Llama(
+                    model_path=self.model_path,
+                    n_ctx=self.n_ctx,
+                    n_threads=self.n_threads,
                     chat_format="llama-3",
                     verbose=False
                 )
-                logger.info("Llama model loaded successfully")
-            except Exception as e:
-                logger.error(f"Failed to load Llama model: {e}")
-                raise
-    return _llm
+                self.pool.put(model)
+            self._initialized = True
+            logger.info("LlamaPool initialized successfully")
 
-class LockedLlama:
-    def __init__(self, llm_instance):
-        self.llm = llm_instance
-        self.lock = threading.Lock()
+    def get_model(self):
+        if not self._initialized:
+            self._initialize()
+        return self.pool.get()
 
-    def create_completion(self, *args, **kwargs):
-        with self.lock:
-            return self.llm.create_completion(*args, **kwargs)
+    def release_model(self, model):
+        self.pool.put(model)
+
+_llama_pool = None
+_llama_pool_lock = threading.Lock()
+
+def get_llama_pool():
+    global _llama_pool
+    with _llama_pool_lock:
+        if _llama_pool is None:
+            model_path = os.getenv("LLM_MODEL_PATH", "models/model-q4_K.gguf")
+            # If path is a directory, look for the gguf file inside
+            if os.path.isdir(model_path):
+                for f in os.listdir(model_path):
+                    if f.endswith(".gguf"):
+                        model_path = os.path.join(model_path, f)
+                        break
+
+            n_instances = int(os.getenv("LLM_POOL_SIZE", 10))
+            n_threads = int(os.getenv("OMP_NUM_THREADS", 8))
+
+            _llama_pool = LlamaPool(model_path, n_instances=n_instances, n_threads=n_threads)
+    return _llama_pool
+
+# Для совместимости с текущим llm_analysis.py, если он использует get_locked_llm
+class PoolLlamaWrapper:
+    def __init__(self, pool):
+        self.pool = pool
 
     def create_chat_completion(self, *args, **kwargs):
-        with self.lock:
-            return self.llm.create_chat_completion(*args, **kwargs)
+        model = self.pool.get_model()
+        try:
+            return model.create_chat_completion(*args, **kwargs)
+        finally:
+            self.pool.release_model(model)
+
+    def create_completion(self, *args, **kwargs):
+        model = self.pool.get_model()
+        try:
+            return model.create_completion(*args, **kwargs)
+        finally:
+            self.pool.release_model(model)
 
 _locked_llm = None
-_locked_llm_lock = threading.Lock()
-
 def get_locked_llm():
     global _locked_llm
-    with _locked_llm_lock:
-        if _locked_llm is None:
-            _locked_llm = LockedLlama(get_llm())
+    if _locked_llm is None:
+        _locked_llm = PoolLlamaWrapper(get_llama_pool())
     return _locked_llm
+
+# Alias for backward compatibility if needed
+def get_llm():
+    return get_locked_llm()
+
+def get_whisper():
+    # Deprecated but kept for compatibility during migration
+    return get_asr_model()

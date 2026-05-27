@@ -3,6 +3,7 @@ import logging
 import numpy as np
 import librosa
 import time
+import concurrent.futures
 from db_utils import (
     fetch_call_metadata, upsert_call, set_call_done, set_call_error,
     insert_transcript, insert_emotion, insert_evaluation, get_pg_connection,
@@ -16,6 +17,35 @@ import tempfile
 import soundfile as sf
 
 logger = logging.getLogger(__name__)
+
+def process_channel(channel_name, audio_path, audio_data, sample_rate, linkedid):
+    """Функция для обработки одного канала (ASR + Эмоции)"""
+    logger.info(f"[{linkedid}] Starting processing for channel: {channel_name}")
+    try:
+        segments = transcribe_audio(audio_path)
+        logger.info(f"[{linkedid}] Analyzing emotions for {channel_name} ({len(segments)} segments)")
+
+        results = []
+        # Нам нужно сохранять в БД, но pg_conn не потокобезопасен, если использовать один на всех.
+        # Поэтому открываем новое соединение внутри потока.
+        with get_pg_connection() as conn:
+            for start, end, text in segments:
+                start_samp = int(start * sample_rate)
+                end_samp = int(end * sample_rate)
+                chunk = audio_data[start_samp:end_samp]
+
+                if len(chunk) < 400: # Минимальный размер для STFT
+                    emotion, conf = "neutral", 1.0
+                else:
+                    emotion, conf = predict_emotion(chunk, sample_rate)
+
+                tid = insert_transcript(linkedid, channel_name, start, end, text, conn=conn)
+                insert_emotion(tid, emotion, conf, conn=conn)
+                results.append((start, f"{channel_name.capitalize()}: {text}"))
+        return results
+    except Exception as e:
+        logger.error(f"[{linkedid}] Error processing channel {channel_name}: {e}")
+        return []
 
 def process_file(file_path: str, prompt_id: int = None, force: bool = False):
     base = os.path.basename(file_path)
@@ -115,39 +145,15 @@ def process_file(file_path: str, prompt_id: int = None, force: bool = False):
                     sf.write(left_path, left_y, sr)
                     sf.write(right_path, right_y, sr)
 
-                    # 7. Транскрибация
-                    logger.info(f"[{linkedid}] Transcribing operator channel...")
-                    left_segments = transcribe_audio(left_path)
-                    logger.info(f"[{linkedid}] Transcribing client channel...")
-                    right_segments = transcribe_audio(right_path)
+                    # 7. Параллельная обработка каналов
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+                        future_left = executor.submit(process_channel, "operator", left_path, left_y, sr, linkedid)
+                        future_right = executor.submit(process_channel, "client", right_path, right_y, sr, linkedid)
 
-                    # 8. Эмоции + сохранение
-                    def process_segments(segments, channel, audio_data, sample_rate, call_linkedid, db_conn):
-                        logger.info(f"[{call_linkedid}] Analyzing emotions for {channel} ({len(segments)} segments)")
-                        transcript_texts = []
-                        for start, end, text in segments:
-                            start_samp = int(start * sample_rate)
-                            end_samp = int(end * sample_rate)
-                            chunk = audio_data[start_samp:end_samp]
+                        left_results = future_left.result()
+                        right_results = future_right.result()
 
-                            if len(chunk) == 0:
-                                continue
-
-                            emotion, conf = predict_emotion(chunk, sample_rate)
-                            tid = insert_transcript(call_linkedid, channel, start, end, text, conn=db_conn)
-                            insert_emotion(tid, emotion, conf, conn=db_conn)
-                            transcript_texts.append(f"{channel}: [{start:.2f}-{end:.2f}] {text} (эмоция: {emotion})")
-                        return transcript_texts
-
-                    process_segments(left_segments, "operator", left_y, sr, linkedid, pg_conn)
-                    process_segments(right_segments, "client", right_y, sr, linkedid, pg_conn)
-
-                    all_segments = []
-                    for start, end, text in left_segments:
-                        all_segments.append((start, f"Operator: {text}"))
-                    for start, end, text in right_segments:
-                        all_segments.append((start, f"Client: {text}"))
-
+                    all_segments = left_results + right_results
                     all_segments.sort(key=lambda x: x[0])
                     full_dialogue = "\n".join([s[1] for s in all_segments])
             else:
