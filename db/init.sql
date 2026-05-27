@@ -87,3 +87,9 @@ CREATE TABLE system_settings (
 );
 
 INSERT INTO system_settings (key, value) VALUES ('is_running', 'true');
+
+CREATE TABLE phones (
+    number VARCHAR(40) PRIMARY KEY,
+    name   VARCHAR(200),
+    use    BOOLEAN DEFAULT TRUE
+);
