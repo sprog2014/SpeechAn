@@ -47,6 +47,8 @@ def main():
     parser.add_argument("dates", nargs='+', help="Date (YYYY-MM-DD) or range (Start End)")
     parser.add_argument("--prompt_id", type=int, help="Optional prompt ID to use for analysis")
     parser.add_argument("--workers", type=int, default=NUM_WORKERS, help="Number of parallel workers")
+    parser.add_argument("--force", action="store_true", help="Force re-processing even if evaluation exists")
+    parser.add_argument("--ignore-stop-flag", action="store_true", help="Ignore system stop flag in system_settings")
 
     args = parser.parse_args()
 
@@ -66,23 +68,37 @@ def main():
         logger.info("Nothing to do.")
         return
 
+    # Check system running status
+    is_running = get_system_running_status()
+    if not is_running:
+        if args.ignore_stop_flag:
+            logger.warning("System is OSTOPPED in settings, but --ignore-stop-flag is set. Proceeding...")
+        else:
+            logger.error("System is STOPPED in settings. Manual run aborted. Use --ignore-stop-flag to bypass.")
+            return
+
     # Pre-load models
     logger.info("Initializing models...")
-    get_whisper()
-    get_emotion_model()
-    get_llm()
+    try:
+        get_whisper()
+        get_emotion_model()
+        get_llm()
+    except Exception as e:
+        logger.error(f"Failed to initialize models: {e}")
+        return
 
+    logger.info(f"Starting processing with {args.workers} workers...")
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers) as executor:
         futures = []
         for f_path in files:
-            # Проверка флага остановки перед запуском очередного файла
-            if not get_system_running_status():
+            # Проверка флага остановки перед запуском очередного файла (если не игнорируем)
+            if not args.ignore_stop_flag and not get_system_running_status():
                 logger.info("System stop flag detected. Stopping manual run.")
                 break
 
             linkedid = os.path.splitext(os.path.basename(f_path))[0]
-            logger.info(f"[{linkedid}] Submitting manual task")
-            futures.append(executor.submit(process_file, f_path, prompt_id=args.prompt_id))
+            logger.info(f"[{linkedid}] Submitting manual task (force={args.force})")
+            futures.append(executor.submit(process_file, f_path, prompt_id=args.prompt_id, force=args.force))
 
         for future in concurrent.futures.as_completed(futures):
             try:

@@ -17,7 +17,7 @@ import soundfile as sf
 
 logger = logging.getLogger(__name__)
 
-def process_file(file_path: str, prompt_id: int = None):
+def process_file(file_path: str, prompt_id: int = None, force: bool = False):
     base = os.path.basename(file_path)
     linkedid = os.path.splitext(base)[0]
     logger.info(f"[{linkedid}] --- Processing started ---")
@@ -42,7 +42,7 @@ def process_file(file_path: str, prompt_id: int = None):
             current_prompt_text = prompt_data['prompt_text']
 
             # 2. Проверяем, есть ли уже результат для этого промпта
-            if check_evaluation_exists(linkedid, current_prompt_id, conn=pg_conn):
+            if not force and check_evaluation_exists(linkedid, current_prompt_id, conn=pg_conn):
                 logger.info(f"[{linkedid}] Evaluation for prompt_id={current_prompt_id} already exists. Skipping.")
                 return
 
