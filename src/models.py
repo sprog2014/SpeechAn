@@ -65,6 +65,8 @@ def get_llm():
                     model_path=model_path,
                     n_ctx=4096,
                     n_threads=int(os.getenv("OMP_NUM_THREADS", 8)),
+                    # Указываем формат чата, если необходимо. Для Llama 3 обычно используется "llama-3"
+                    chat_format="llama-3",
                     verbose=False
                 )
                 logger.info("Llama model loaded successfully")
@@ -81,6 +83,10 @@ class LockedLlama:
     def create_completion(self, *args, **kwargs):
         with self.lock:
             return self.llm.create_completion(*args, **kwargs)
+
+    def create_chat_completion(self, *args, **kwargs):
+        with self.lock:
+            return self.llm.create_chat_completion(*args, **kwargs)
 
 _locked_llm = None
 _locked_llm_lock = threading.Lock()
