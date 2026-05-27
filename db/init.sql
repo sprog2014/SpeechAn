@@ -1,6 +1,7 @@
 CREATE DATABASE call_analysis;
 \c call_analysis
 
+DROP TABLE IF EXISTS processing_stats;
 DROP TABLE IF EXISTS evaluations;
 DROP TABLE IF EXISTS speech_emotions;
 DROP TABLE IF EXISTS transcripts;
