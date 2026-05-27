@@ -7,7 +7,7 @@ from db_utils import (
     fetch_call_metadata, upsert_call, set_call_done, set_call_error,
     insert_transcript, insert_emotion, insert_evaluation, get_pg_connection,
     get_default_prompt, get_prompt_by_id, check_transcript_exists, check_evaluation_exists,
-    set_processing_duration
+    set_processing_duration, check_phone_usage, get_system_setting, is_phone_registered
 )
 from asr import transcribe_audio
 from emotion import predict_emotion
@@ -56,6 +56,23 @@ def process_file(file_path: str, prompt_id: int = None, force: bool = False):
             except Exception as e:
                 logger.error(f"[{linkedid}] ABORT: Failed to fetch metadata from MySQL: {e}")
                 set_call_error(linkedid, conn=pg_conn)
+                return
+
+            # 3.5 Проверка фильтров по номеру телефона
+            src_num = metadata.get('src')
+            dst_num = metadata.get('answeredext')
+
+            # Проверка на локальный звонок
+            if get_system_setting('skip_local_calls', 'false', conn=pg_conn).lower() == 'true':
+                if is_phone_registered(src_num, conn=pg_conn) and is_phone_registered(dst_num, conn=pg_conn):
+                    logger.info(f"[{linkedid}] SKIP: Local call between {src_num} and {dst_num} skipped.")
+                    return
+
+            allowed_src = check_phone_usage(src_num, conn=pg_conn)
+            allowed_dst = check_phone_usage(dst_num, conn=pg_conn)
+
+            if not allowed_src and not allowed_dst:
+                logger.info(f"[{linkedid}] SKIP: Numbers {src_num} and {dst_num} are not enabled for analysis.")
                 return
 
             # 4. Запись в calls

@@ -10,7 +10,8 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src'))
 from db_utils import (
     get_system_running_status, set_system_running_status,
     get_all_prompts, upsert_prompt, delete_prompt, set_default_prompt,
-    get_pg_connection
+    get_pg_connection, get_all_phones, update_phone_use, sync_phones_from_external_db,
+    get_system_setting, set_system_setting
 )
 from config import PG_CONFIG
 
@@ -190,6 +191,57 @@ with st.form("manual_run_form"):
             st.info(f"Процесс ручного запуска инициирован (PID: {process.pid}).")
         else:
             st.error("Выберите промпт для запуска.")
+
+# --- Раздел 5: Телефонный справочник ---
+st.header("Телефонный справочник")
+
+skip_local = get_system_setting('skip_local_calls', 'false').lower() == 'true'
+if st.checkbox("Пропускать анализ локальных звонков", value=skip_local):
+    if not skip_local:
+        set_system_setting('skip_local_calls', 'true')
+        st.rerun()
+else:
+    if skip_local:
+        set_system_setting('skip_local_calls', 'false')
+        st.rerun()
+
+phones_list = get_all_phones()
+if phones_list:
+    df_phones = pd.DataFrame(phones_list)
+
+    edited_df = st.data_editor(
+        df_phones,
+        column_config={
+            "number": st.column_config.TextColumn("Номер", disabled=True),
+            "name": st.column_config.TextColumn("Имя", disabled=True),
+            "use": st.column_config.CheckboxColumn("Использовать в анализе")
+        },
+        hide_index=True,
+        use_container_width=True
+    )
+
+    col_p1, col_p2 = st.columns(2)
+    if col_p1.button("Сохранить изменения", use_container_width=True):
+        # Проверяем что изменилось
+        for i, row in edited_df.iterrows():
+            orig_row = df_phones.iloc[i]
+            if row['use'] != orig_row['use']:
+                update_phone_use(row['number'], row['use'])
+        st.success("Изменения сохранены!")
+        st.rerun()
+
+    if col_p2.button("Синхронизировать список номеров", use_container_width=True):
+        with st.spinner("Синхронизация..."):
+            sync_phones_from_external_db()
+        st.success("Список номеров синхронизирован!")
+        st.rerun()
+else:
+    st.info("Список номеров пуст.")
+    if st.button("Синхронизировать список номеров"):
+        with st.spinner("Синхронизация..."):
+            sync_phones_from_external_db()
+        st.success("Список номеров синхронизирован!")
+        st.rerun()
 
 if st.button("Перейти к Аналитике"):
     st.switch_page("pages/1_analytics.py")
