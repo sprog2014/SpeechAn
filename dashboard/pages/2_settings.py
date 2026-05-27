@@ -6,7 +6,11 @@ import subprocess
 from datetime import datetime, timedelta
 
 # Добавляем путь к src
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src'))
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+SRC_DIR = os.path.join(PROJECT_ROOT, 'src')
+if SRC_DIR not in sys.path:
+    sys.path.append(SRC_DIR)
+
 from db_utils import (
     get_system_running_status, set_system_running_status,
     get_all_prompts, upsert_prompt, delete_prompt, set_default_prompt,
@@ -145,15 +149,21 @@ with st.form("manual_run_form"):
 
     if submit_manual:
         if selected_manual_prompt:
+            script_path = os.path.join(SRC_DIR, "manual_run.py")
             cmd = [
-                "python3", "src/manual_run.py",
+                "python3", script_path,
                 date_start.strftime("%Y-%m-%d"),
                 date_end.strftime("%Y-%m-%d"),
                 "--prompt_id", str(selected_manual_prompt),
                 "--ignore-stop-flag"
             ]
+
+            # Передаем окружение с PYTHONPATH
+            env = os.environ.copy()
+            env["PYTHONPATH"] = f"{env.get('PYTHONPATH', '')}:{PROJECT_ROOT}:{SRC_DIR}"
+
             # Не используем PIPE, чтобы избежать зависаний при переполнении буфера
-            process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env, cwd=PROJECT_ROOT)
             st.info(f"Процесс ручного запуска инициирован (PID: {process.pid}).")
         else:
             st.error("Выберите промпт для запуска.")
