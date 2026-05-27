@@ -132,14 +132,14 @@ def get_processing_statistics(start_date, end_date):
     with get_pg_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
 
-        # 1. Сводка по дням: всего, пропущено, обработано, в ожидании + времена
+        # 1. Сводка по дням: пропущено, обработано, в процессе, ошибка + времена
         cur.execute("""
             SELECT
                 DATE(calldate) as date,
-                COUNT(*) as total,
                 COUNT(*) FILTER (WHERE processing_status = 'skipped') as skipped,
                 COUNT(*) FILTER (WHERE processing_status = 'done') as processed,
-                COUNT(*) FILTER (WHERE processing_status IN ('new', 'processing')) as waiting,
+                COUNT(*) FILTER (WHERE processing_status = 'processing') as in_progress,
+                COUNT(*) FILTER (WHERE processing_status = 'error') as error,
                 ROUND(AVG(processing_duration) FILTER (WHERE processing_status = 'done')::numeric, 2) as avg_duration,
                 ROUND(SUM(processing_duration) FILTER (WHERE processing_status = 'done')::numeric, 2) as total_duration
             FROM calls
