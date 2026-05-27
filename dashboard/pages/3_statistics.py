@@ -1,13 +1,32 @@
 import streamlit as st
 import pandas as pd
+import os
 from datetime import datetime, timedelta
 from db_utils import get_processing_statistics, get_prompt_usage_statistics
+from config import RECORDS_ROOT
 import plotly.express as px
 import plotly.graph_objects as go
 
 st.set_page_config(page_title="Статистика работы", layout="wide")
 
 st.title("📊 Статистика работы системы")
+
+def get_disk_file_counts(start_date, end_date):
+    """Считает количество .mp3 файлов в RECORDS_ROOT в разрезе дат."""
+    counts = {}
+    curr = start_date
+    while curr <= end_date:
+        date_path = curr.strftime("%Y/%m/%d")
+        full_path = os.path.join(RECORDS_ROOT, date_path)
+        count = 0
+        if os.path.exists(full_path):
+            for root, dirs, files in os.walk(full_path):
+                for f in files:
+                    if f.lower().endswith('.mp3'):
+                        count += 1
+        counts[curr] = count
+        curr += timedelta(days=1)
+    return counts
 
 # Фильтры
 col1, col2 = st.columns(2)
@@ -20,23 +39,35 @@ if start_date > end_date:
     st.error("Дата начала не может быть больше даты окончания")
 else:
     stats = get_processing_statistics(start_date, end_date)
+    disk_counts = get_disk_file_counts(start_date, end_date)
 
     if not stats or not stats['daily_stats']:
         st.info("Нет данных за выбранный период")
     else:
         # 1. Основные показатели (карточки)
         df_daily = pd.DataFrame(stats['daily_stats'])
+        df_daily['date'] = pd.to_datetime(df_daily['date']).dt.date
 
-        total_calls = df_daily['total'].sum()
+        # Добавляем данные с диска
+        df_daily['total_disk'] = df_daily['date'].apply(lambda d: disk_counts.get(d, 0))
+
+        # Считаем очередь: Всего на диске - (Обработано + Пропущено + В процессе + Ошибки)
+        df_daily['queued'] = df_daily['total_disk'] - (df_daily['processed'] + df_daily['skipped'] + df_daily['in_progress'] + df_daily['error'])
+        # Очередь не может быть отрицательной
+        df_daily['queued'] = df_daily['queued'].apply(lambda x: max(0, x))
+
+        total_calls = df_daily['total_disk'].sum()
         total_processed = df_daily['processed'].sum()
         total_skipped = df_daily['skipped'].sum()
-        total_waiting = df_daily['waiting'].sum()
+        total_in_progress = df_daily['in_progress'].sum()
+        total_queued = df_daily['queued'].sum()
 
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Всего записей", total_calls)
+        m1, m2, m3, m4, m5 = st.columns(5)
+        m1.metric("Всего на диске", total_calls)
         m2.metric("Обработано", total_processed)
         m3.metric("Пропущено", total_skipped)
-        m4.metric("В ожидании", total_waiting)
+        m4.metric("В обработке", total_in_progress)
+        m5.metric("В очереди", total_queued)
 
         st.divider()
 
@@ -47,13 +78,15 @@ else:
         df_plot_daily = df_daily.rename(columns={
             'processed': 'Обработано',
             'skipped': 'Пропущено',
-            'waiting': 'В ожидании'
+            'in_progress': 'В обработке',
+            'queued': 'В очереди',
+            'error': 'Ошибка'
         })
 
         fig_daily = px.bar(
             df_plot_daily,
             x='date',
-            y=['Обработано', 'Пропущено', 'В ожидании'],
+            y=['Обработано', 'Пропущено', 'В обработке', 'В очереди', 'Ошибка'],
             title="Статус обработки по дням",
             labels={'value': 'Количество', 'date': 'Дата', 'variable': 'Статус'},
             barmode='stack'
@@ -66,13 +99,16 @@ else:
             use_container_width=True,
             column_config={
                 "date": "Дата",
-                "total": "Всего",
+                "total_disk": "Всего",
                 "skipped": "Пропущено",
                 "processed": "Обработано",
-                "waiting": "В ожидании",
+                "in_progress": "В обработке",
+                "queued": "В очереди",
+                "error": "Ошибка",
                 "avg_duration": "Среднее время (сек)",
                 "total_duration": "Общее время (сек)"
-            }
+            },
+            hide_index=True
         )
 
         st.divider()
