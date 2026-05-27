@@ -184,7 +184,8 @@ with st.form("manual_run_form"):
                 "python3", "src/manual_run.py",
                 date_start.strftime("%Y-%m-%d"),
                 date_end.strftime("%Y-%m-%d"),
-                "--prompt_id", str(selected_manual_prompt)
+                "--prompt_id", str(selected_manual_prompt),
+                "--ignore-stop-flag"
             ]
             # Не используем PIPE, чтобы избежать зависаний при переполнении буфера
             process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
