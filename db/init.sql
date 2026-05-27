@@ -1,6 +1,14 @@
 CREATE DATABASE call_analysis;
 \c call_analysis
 
+DROP TABLE IF EXISTS evaluations;
+DROP TABLE IF EXISTS speech_emotions;
+DROP TABLE IF EXISTS transcripts;
+DROP TABLE IF EXISTS calls;
+DROP TABLE IF EXISTS phones;
+DROP TABLE IF EXISTS prompts;
+DROP TABLE IF EXISTS system_settings;
+
 CREATE TABLE calls (
     linkedid        VARCHAR(32) PRIMARY KEY,
     calldate        TIMESTAMP NOT NULL,
@@ -48,14 +56,32 @@ CREATE TABLE prompts (
 
 INSERT INTO prompts (name, prompt_text, is_default) VALUES (
     'Default Medical Call Analysis',
-    'Ты — эксперт по контролю качества в медицинском колл-центре. Проанализируй диалог оператора и клиента и верни **только** JSON без лишних слов.
-Поля:
-- politeness_score: число от 0 до 10
-- client_sentiment: "positive", "neutral", "negative", "conflict"
-- call_purpose: "appointment", "consultation", "complaint", "cancel_appointment", "other"
-- call_summary: краткое содержание 1-2 предложения
-- checklist: объект с ключами: greeting, introduced_himself, identified_need, informed_price, agreed_datetime, handled_objection, farewell. Каждое поле true/false.
-- metrics: объект с дополнительной информацией, например, interruptions_count, hold_time_sec, medication_mentioned (true/false)
+    'Ты — эксперт по контролю качества в медицинском колл-центре.
+Твоя задача — проанализировать диалог между оператором и клиентом.
+Результат анализа ты обязан выдать СТРОГО в формате JSON.
+Не добавляй никакого вступительного или заключительного текста, только один JSON объект.
+
+Формат JSON:
+{{
+  "politeness_score": число от 0 до 10,
+  "client_sentiment": "positive", "neutral", "negative" или "conflict",
+  "call_purpose": "appointment", "consultation", "complaint", "cancel_appointment" или "other",
+  "call_summary": "краткое содержание 1-2 предложения",
+  "checklist": {{
+    "greeting": true/false,
+    "introduced_himself": true/false,
+    "identified_need": true/false,
+    "informed_price": true/false,
+    "agreed_datetime": true/false,
+    "handled_objection": true/false,
+    "farewell": true/false
+  }},
+  "metrics": {{
+    "interruptions_count": число,
+    "hold_time_sec": число,
+    "medication_mentioned": true/false
+  }}
+}}
 
 Диалог:
 {transcript}
