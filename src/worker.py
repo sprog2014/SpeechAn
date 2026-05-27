@@ -7,7 +7,8 @@ from db_utils import (
     fetch_call_metadata, upsert_call, set_call_done, set_call_error,
     insert_transcript, insert_emotion, insert_evaluation, get_pg_connection,
     get_default_prompt, get_prompt_by_id, check_transcript_exists, check_evaluation_exists,
-    set_processing_duration, check_phone_usage, get_system_setting, is_phone_registered
+    set_processing_duration, check_phone_usage, get_system_setting, is_phone_registered,
+    insert_processing_stats, set_call_status
 )
 from asr import transcribe_audio
 from emotion import predict_emotion
@@ -62,10 +63,15 @@ def process_file(file_path: str, prompt_id: int = None, force: bool = False):
             src_num = metadata.get('src')
             dst_num = metadata.get('answeredext')
 
+            # 4. Запись в calls (сначала создаем запись, чтобы потом можно было менять статус на skipped)
+            logger.debug(f"[{linkedid}] Upserting call record to PostgreSQL")
+            upsert_call(metadata, file_path, conn=pg_conn)
+
             # Проверка на локальный звонок
             if get_system_setting('skip_local_calls', 'false', conn=pg_conn).lower() == 'true':
                 if is_phone_registered(src_num, conn=pg_conn) and is_phone_registered(dst_num, conn=pg_conn):
                     logger.info(f"[{linkedid}] SKIP: Local call between {src_num} and {dst_num} skipped.")
+                    set_call_status(linkedid, 'skipped', conn=pg_conn)
                     return
 
             allowed_src = check_phone_usage(src_num, conn=pg_conn)
@@ -73,15 +79,16 @@ def process_file(file_path: str, prompt_id: int = None, force: bool = False):
 
             if not allowed_src and not allowed_dst:
                 logger.info(f"[{linkedid}] SKIP: Numbers {src_num} and {dst_num} are not enabled for analysis.")
+                set_call_status(linkedid, 'skipped', conn=pg_conn)
                 return
-
-            # 4. Запись в calls
-            logger.debug(f"[{linkedid}] Upserting call record to PostgreSQL")
-            upsert_call(metadata, file_path, conn=pg_conn)
 
             # 5. Проверяем наличие транскрипции
             transcript_exists = check_transcript_exists(linkedid, conn=pg_conn)
             full_dialogue = ""
+
+            asr_duration = 0
+            emotion_duration = 0
+            llm_duration = 0
 
             if not transcript_exists:
                 # 6. Загрузка и разделение каналов
@@ -116,12 +123,15 @@ def process_file(file_path: str, prompt_id: int = None, force: bool = False):
                     sf.write(right_path, right_y, sr)
 
                     # 7. Транскрибация
+                    t_asr_start = time.time()
                     logger.info(f"[{linkedid}] Transcribing operator channel...")
                     left_segments = transcribe_audio(left_path)
                     logger.info(f"[{linkedid}] Transcribing client channel...")
                     right_segments = transcribe_audio(right_path)
+                    asr_duration = time.time() - t_asr_start
 
                     # 8. Эмоции + сохранение
+                    t_emo_start = time.time()
                     def process_segments(segments, channel, audio_data, sample_rate, call_linkedid, db_conn):
                         logger.info(f"[{call_linkedid}] Analyzing emotions for {channel} ({len(segments)} segments)")
                         transcript_texts = []
@@ -141,6 +151,7 @@ def process_file(file_path: str, prompt_id: int = None, force: bool = False):
 
                     process_segments(left_segments, "operator", left_y, sr, linkedid, pg_conn)
                     process_segments(right_segments, "client", right_y, sr, linkedid, pg_conn)
+                    emotion_duration = time.time() - t_emo_start
 
                     all_segments = []
                     for start, end, text in left_segments:
@@ -158,9 +169,11 @@ def process_file(file_path: str, prompt_id: int = None, force: bool = False):
                 full_dialogue = "\n".join([f"{r[0].capitalize()}: {r[1]}" for r in rows])
 
             if full_dialogue.strip():
+                t_llm_start = time.time()
                 logger.info(f"[{linkedid}] Starting LLM analysis (Dialogue length: {len(full_dialogue)} chars)")
                 eval_result = analyze_transcript(full_dialogue, prompt_template=current_prompt_text)
                 insert_evaluation(linkedid, current_prompt_id, eval_result, conn=pg_conn)
+                llm_duration = time.time() - t_llm_start
                 logger.info(f"[{linkedid}] LLM analysis completed and saved")
             else:
                 logger.warning(f"[{linkedid}] Empty transcript, skipping LLM analysis")
@@ -168,6 +181,10 @@ def process_file(file_path: str, prompt_id: int = None, force: bool = False):
             set_call_done(linkedid, conn=pg_conn)
             duration_total = time.time() - start_total
             set_processing_duration(linkedid, duration_total, conn=pg_conn)
+
+            # Записываем статистику по этапам
+            insert_processing_stats(linkedid, asr_duration, emotion_duration, llm_duration, duration_total, conn=pg_conn)
+
             logger.info(f"[{linkedid}] --- SUCCESS! Total time: {duration_total:.2f}s ---")
 
     except Exception as e:

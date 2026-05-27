@@ -108,6 +108,76 @@ def upsert_call(metadata, file_path, conn=None):
         with get_pg_connection() as conn:
             _execute(conn)
 
+def insert_processing_stats(linkedid, asr_dur, emo_dur, llm_dur, total_dur, conn=None):
+    def _execute(c):
+        cur = c.cursor()
+        cur.execute("""
+            INSERT INTO processing_stats (linkedid, asr_duration, emotion_duration, llm_duration, total_duration)
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (linkedid) DO UPDATE SET
+                asr_duration = EXCLUDED.asr_duration,
+                emotion_duration = EXCLUDED.emotion_duration,
+                llm_duration = EXCLUDED.llm_duration,
+                total_duration = EXCLUDED.total_duration
+        """, (linkedid, asr_dur, emo_dur, llm_dur, total_dur))
+        c.commit()
+
+    if conn:
+        _execute(conn)
+    else:
+        with get_pg_connection() as conn:
+            _execute(conn)
+
+def get_processing_statistics(start_date, end_date):
+    with get_pg_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+
+        # 1. Сводка по дням: всего, пропущено, обработано, в ожидании
+        cur.execute("""
+            SELECT
+                DATE(calldate) as date,
+                COUNT(*) as total,
+                COUNT(*) FILTER (WHERE processing_status = 'skipped') as skipped,
+                COUNT(*) FILTER (WHERE processing_status = 'done') as processed,
+                COUNT(*) FILTER (WHERE processing_status IN ('new', 'processing')) as waiting
+            FROM calls
+            WHERE calldate >= %s AND calldate <= %s
+            GROUP BY DATE(calldate)
+            ORDER BY DATE(calldate) DESC
+        """, (start_date, end_date))
+        daily_stats = cur.fetchall()
+
+        # 2. Скорость анализа: файлов в час
+        # Берем данные из processing_stats
+        cur.execute("""
+            SELECT
+                DATE(created_at) as date,
+                COUNT(*) as count,
+                AVG(total_duration) as avg_total_duration
+            FROM processing_stats
+            WHERE created_at >= %s AND created_at <= %s
+            GROUP BY DATE(created_at)
+        """, (start_date, end_date))
+        speed_stats = cur.fetchall()
+
+        # 3. Распределение по этапам
+        cur.execute("""
+            SELECT
+                AVG(asr_duration) as avg_asr,
+                AVG(emotion_duration) as avg_emo,
+                AVG(llm_duration) as avg_llm,
+                AVG(total_duration) as avg_total
+            FROM processing_stats
+            WHERE created_at >= %s AND created_at <= %s
+        """, (start_date, end_date))
+        timings = cur.fetchone()
+
+        return {
+            "daily_stats": daily_stats,
+            "speed_stats": speed_stats,
+            "timings": timings
+        }
+
 def get_all_phones(conn=None):
     def _execute(c):
         cur = c.cursor(cursor_factory=RealDictCursor)
