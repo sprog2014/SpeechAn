@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 def process_file(file_path: str, prompt_id: int = None, force: bool = False):
     base = os.path.basename(file_path)
     linkedid = os.path.splitext(base)[0]
-    logger.info(f"[{linkedid}] --- Processing started ---")
+    logger.info(f"[{linkedid}] --- Processing started --- (Path: {file_path})")
 
     start_total = time.time()
     pg_conn = None
@@ -30,25 +30,33 @@ def process_file(file_path: str, prompt_id: int = None, force: bool = False):
         with get_pg_connection() as conn:
             pg_conn = conn
             if prompt_id:
+                logger.debug(f"[{linkedid}] Fetching prompt by ID: {prompt_id}")
                 prompt_data = get_prompt_by_id(prompt_id, conn=pg_conn)
             else:
+                logger.debug(f"[{linkedid}] Fetching default prompt")
                 prompt_data = get_default_prompt(conn=pg_conn)
 
             if not prompt_data:
-                logger.error(f"[{linkedid}] Prompt not found (id={prompt_id})")
+                logger.error(f"[{linkedid}] ABORT: Prompt not found (id={prompt_id})")
                 return
 
             current_prompt_id = prompt_data['id']
             current_prompt_text = prompt_data['prompt_text']
+            logger.info(f"[{linkedid}] Using prompt ID: {current_prompt_id}")
 
             # 2. Проверяем, есть ли уже результат для этого промпта
             if not force and check_evaluation_exists(linkedid, current_prompt_id, conn=pg_conn):
-                logger.info(f"[{linkedid}] Evaluation for prompt_id={current_prompt_id} already exists. Skipping.")
+                logger.info(f"[{linkedid}] SKIP: Evaluation for prompt_id={current_prompt_id} already exists. Use --force to overwrite.")
                 return
 
             # 3. Метаданные из MySQL
             logger.debug(f"[{linkedid}] Fetching metadata from MySQL")
-            metadata = fetch_call_metadata(linkedid)
+            try:
+                metadata = fetch_call_metadata(linkedid)
+            except Exception as e:
+                logger.error(f"[{linkedid}] ABORT: Failed to fetch metadata from MySQL: {e}")
+                set_call_error(linkedid, conn=pg_conn)
+                return
 
             # 4. Запись в calls
             logger.debug(f"[{linkedid}] Upserting call record to PostgreSQL")
@@ -60,9 +68,19 @@ def process_file(file_path: str, prompt_id: int = None, force: bool = False):
 
             if not transcript_exists:
                 # 6. Загрузка и разделение каналов
+                if not os.path.exists(file_path):
+                    logger.error(f"[{linkedid}] ABORT: Audio file not found at {file_path}")
+                    set_call_error(linkedid, conn=pg_conn)
+                    return
+
                 logger.info(f"[{linkedid}] Loading audio and splitting channels")
                 t0 = time.time()
-                y, sr = librosa.load(file_path, sr=16000, mono=False)
+                try:
+                    y, sr = librosa.load(file_path, sr=16000, mono=False)
+                except Exception as e:
+                    logger.error(f"[{linkedid}] ABORT: librosa failed to load file: {e}")
+                    set_call_error(linkedid, conn=pg_conn)
+                    return
 
                 if y.ndim != 2 or y.shape[0] != 2:
                     logger.warning(f"[{linkedid}] Audio is not stereo, shape: {y.shape}. Processing as mono.")
@@ -81,9 +99,9 @@ def process_file(file_path: str, prompt_id: int = None, force: bool = False):
                     sf.write(right_path, right_y, sr)
 
                     # 7. Транскрибация
-                    logger.info(f"[{linkedid}] Transcribing operator channel")
+                    logger.info(f"[{linkedid}] Transcribing operator channel...")
                     left_segments = transcribe_audio(left_path)
-                    logger.info(f"[{linkedid}] Transcribing client channel")
+                    logger.info(f"[{linkedid}] Transcribing client channel...")
                     right_segments = transcribe_audio(right_path)
 
                     # 8. Эмоции + сохранение
@@ -116,28 +134,30 @@ def process_file(file_path: str, prompt_id: int = None, force: bool = False):
                     all_segments.sort(key=lambda x: x[0])
                     full_dialogue = "\n".join([s[1] for s in all_segments])
             else:
-                logger.info(f"[{linkedid}] Transcript already exists. Loading from DB.")
+                logger.info(f"[{linkedid}] Transcript already exists in DB. Skipping ASR/Emotion.")
                 cur = pg_conn.cursor()
                 cur.execute("SELECT channel, text, start_time FROM transcripts WHERE linkedid = %s ORDER BY start_time", (linkedid,))
                 rows = cur.fetchall()
                 full_dialogue = "\n".join([f"{r[0].capitalize()}: {r[1]}" for r in rows])
 
             if full_dialogue.strip():
-                logger.info(f"[{linkedid}] Starting LLM analysis with prompt_id={current_prompt_id}")
+                logger.info(f"[{linkedid}] Starting LLM analysis (Dialogue length: {len(full_dialogue)} chars)")
                 eval_result = analyze_transcript(full_dialogue, prompt_template=current_prompt_text)
                 insert_evaluation(linkedid, current_prompt_id, eval_result, conn=pg_conn)
+                logger.info(f"[{linkedid}] LLM analysis completed and saved")
             else:
                 logger.warning(f"[{linkedid}] Empty transcript, skipping LLM analysis")
 
             set_call_done(linkedid, conn=pg_conn)
             duration_total = time.time() - start_total
             set_processing_duration(linkedid, duration_total, conn=pg_conn)
-            logger.info(f"[{linkedid}] --- Success! Total time: {duration_total:.2f}s ---")
+            logger.info(f"[{linkedid}] --- SUCCESS! Total time: {duration_total:.2f}s ---")
 
     except Exception as e:
-        logger.exception(f"[{linkedid}] Failed during processing: {e}")
+        logger.exception(f"[{linkedid}] CRITICAL: Failed during processing: {e}")
         try:
-            set_call_error(linkedid)
+            if pg_conn:
+                set_call_error(linkedid, conn=pg_conn)
         except:
             pass
 
