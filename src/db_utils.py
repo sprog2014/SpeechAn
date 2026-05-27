@@ -132,14 +132,16 @@ def get_processing_statistics(start_date, end_date):
     with get_pg_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
 
-        # 1. Сводка по дням: всего, пропущено, обработано, в ожидании
+        # 1. Сводка по дням: всего, пропущено, обработано, в ожидании + времена
         cur.execute("""
             SELECT
                 DATE(calldate) as date,
                 COUNT(*) as total,
                 COUNT(*) FILTER (WHERE processing_status = 'skipped') as skipped,
                 COUNT(*) FILTER (WHERE processing_status = 'done') as processed,
-                COUNT(*) FILTER (WHERE processing_status IN ('new', 'processing')) as waiting
+                COUNT(*) FILTER (WHERE processing_status IN ('new', 'processing')) as waiting,
+                ROUND(AVG(processing_duration) FILTER (WHERE processing_status = 'done')::numeric, 2) as avg_duration,
+                ROUND(SUM(processing_duration) FILTER (WHERE processing_status = 'done')::numeric, 2) as total_duration
             FROM calls
             WHERE calldate >= %s AND calldate <= %s
             GROUP BY DATE(calldate)
@@ -177,6 +179,18 @@ def get_processing_statistics(start_date, end_date):
             "speed_stats": speed_stats,
             "timings": timings
         }
+
+def get_prompt_usage_statistics():
+    with get_pg_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("""
+            SELECT p.name as "name", COUNT(e.linkedid) as "count"
+            FROM prompts p
+            LEFT JOIN evaluations e ON p.id = e.prompt_id
+            GROUP BY p.name
+            ORDER BY "count" DESC
+        """)
+        return cur.fetchall()
 
 def get_all_phones(conn=None):
     def _execute(c):
