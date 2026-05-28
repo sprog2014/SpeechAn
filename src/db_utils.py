@@ -427,21 +427,6 @@ def insert_transcript(linkedid, channel, start, end, text, conn=None):
         with get_pg_connection() as conn:
             return _execute(conn)
 
-def insert_emotion(transcript_id, emotion, confidence, conn=None):
-    def _execute(c):
-        cur = c.cursor()
-        cur.execute("""
-            INSERT INTO speech_emotions (transcript_id, emotion, confidence)
-            VALUES (%s, %s, %s)
-        """, (transcript_id, emotion, confidence))
-        c.commit()
-
-    if conn:
-        _execute(conn)
-    else:
-        with get_pg_connection() as conn:
-            _execute(conn)
-
 def get_default_prompt(conn=None):
     def _execute(c):
         cur = c.cursor(cursor_factory=RealDictCursor)
