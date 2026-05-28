@@ -80,13 +80,14 @@ else:
     # Обработка данных
     def process_row(row):
         # 1. Определение ролей
-        # User: для incoming бери номер клиента из answerdaxt, для outgoing из src
+        # Inbound: src is Client, answeredext is Operator
+        # Outbound: src is Operator, answeredext is Client
         if row['direction'] == 'inbound':
-            op_num = row['src']
-            cl_num = row['answeredext']
-        else:
             op_num = row['answeredext']
             cl_num = row['src']
+        else:
+            op_num = row['src']
+            cl_num = row['answeredext']
 
         row['Имя оператора'] = phone_names.get(op_num, op_num)
 
