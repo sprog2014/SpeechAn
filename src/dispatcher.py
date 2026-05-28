@@ -89,11 +89,10 @@ def task_done_callback(future):
 
 def main():
     # Инициализация глобальных моделей при старте
-    from models import get_asr_model, get_emotion_model, get_llm
+    from models import get_asr_model, get_llm
     logger.info("Starting system initialization...")
     logger.info("Pre-loading models into memory...")
     get_asr_model()
-    get_emotion_model()
     get_llm()
     logger.info("All models loaded. Starting main loop.")
     logger.info(f"Configuration: NUM_WORKERS={NUM_WORKERS}, RECORDS_ROOT={RECORDS_ROOT}")

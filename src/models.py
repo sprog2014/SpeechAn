@@ -14,9 +14,6 @@ logger = logging.getLogger(__name__)
 _asr_model = None
 _asr_lock = threading.Lock()
 
-_emotion_model = None
-_emotion_lock = threading.Lock()
-
 _llm = None
 _llm_lock = threading.Lock()
 
@@ -33,21 +30,6 @@ def get_asr_model():
                 logger.error(f"Failed to load GigaAM ASR model: {e}")
                 raise
     return _asr_model
-
-def get_emotion_model():
-    global _emotion_model
-    with _emotion_lock:
-        if _emotion_model is None:
-            logger.info("Initializing GigaAMEmo model...")
-            try:
-                # Предупреждение о fp16 обычно летит из gigaam.load_model при работе на CPU
-                _emotion_model = gigaam.load_model('emo')
-                _emotion_model.eval()
-                logger.info("GigaAMEmo model loaded successfully")
-            except Exception as e:
-                logger.error(f"Failed to load GigaAMEmo model: {e}")
-                raise
-    return _emotion_model
 
 def get_llm():
     global _llm

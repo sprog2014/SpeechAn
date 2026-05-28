@@ -98,7 +98,6 @@ CREATE TABLE evaluations (
     call_summary      TEXT,
     checklist_json    JSONB DEFAULT '{}',
     metrics_json      JSONB DEFAULT '{}',
-    speech_emotions   TEXT,
     created_at        TIMESTAMP DEFAULT now(),
     PRIMARY KEY (linkedid, prompt_id)
 );
@@ -125,7 +124,6 @@ CREATE TABLE phones (
 CREATE TABLE processing_stats (
     linkedid        VARCHAR(32) PRIMARY KEY REFERENCES calls(linkedid) ON DELETE CASCADE,
     asr_duration    REAL,
-    emotion_duration REAL,
     llm_duration    REAL,
     total_duration  REAL,
     created_at      TIMESTAMP DEFAULT now()

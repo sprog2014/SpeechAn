@@ -171,10 +171,9 @@ else:
             t = stats['timings']
             total = t['avg_total']
 
-            labels = ['Транскрибация (ASR)', 'Эмоциональная оценка', 'LLM Анализ']
+            labels = ['Транскрибация (ASR)', 'LLM Анализ']
             values = [
                 t['avg_asr'] if t['avg_asr'] is not None else 0,
-                t['avg_emo'] if t['avg_emo'] is not None else 0,
                 t['avg_llm'] if t['avg_llm'] is not None else 0
             ]
 
@@ -190,8 +189,7 @@ else:
             with c2:
                 st.write("**Среднее время по этапам (сек):**")
                 st.write(f"- ASR: {values[0]:.2f} сек ({percentages[0]:.1f}%)")
-                st.write(f"- Emotion: {values[1]:.2f} сек ({percentages[1]:.1f}%)")
-                st.write(f"- LLM: {values[2]:.2f} сек ({percentages[2]:.1f}%)")
+                st.write(f"- LLM: {values[1]:.2f} сек ({percentages[1]:.1f}%)")
                 st.write(f"**Итого в среднем на 1 файл:** {total:.2f} сек")
         else:
             st.write("Недостаточно данных для анализа этапов обработки")
