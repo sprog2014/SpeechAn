@@ -5,7 +5,7 @@ import concurrent.futures
 from datetime import datetime, timedelta
 from config import RECORDS_ROOT, NUM_WORKERS
 from worker import process_file
-from models import get_asr_model, get_emotion_model, get_llm
+from models import get_asr_model, get_llm
 from db_utils import get_system_running_status
 
 logging.basicConfig(
@@ -108,7 +108,6 @@ def main():
     try:
         t_load_start = datetime.now()
         get_asr_model()
-        get_emotion_model()
         get_llm()
         t_load_end = datetime.now()
         logger.info(f"Models initialized successfully in {t_load_end - t_load_start}")

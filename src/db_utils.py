@@ -108,18 +108,17 @@ def upsert_call(metadata, file_path, conn=None):
         with get_pg_connection() as conn:
             _execute(conn)
 
-def insert_processing_stats(linkedid, asr_dur, emo_dur, llm_dur, total_dur, conn=None):
+def insert_processing_stats(linkedid, asr_dur, llm_dur, total_dur, conn=None):
     def _execute(c):
         cur = c.cursor()
         cur.execute("""
-            INSERT INTO processing_stats (linkedid, asr_duration, emotion_duration, llm_duration, total_duration)
-            VALUES (%s, %s, %s, %s, %s)
+            INSERT INTO processing_stats (linkedid, asr_duration, llm_duration, total_duration)
+            VALUES (%s, %s, %s, %s)
             ON CONFLICT (linkedid) DO UPDATE SET
                 asr_duration = EXCLUDED.asr_duration,
-                emotion_duration = EXCLUDED.emotion_duration,
                 llm_duration = EXCLUDED.llm_duration,
                 total_duration = EXCLUDED.total_duration
-        """, (linkedid, asr_dur, emo_dur, llm_dur, total_dur))
+        """, (linkedid, asr_dur, llm_dur, total_dur))
         c.commit()
 
     if conn:
@@ -166,7 +165,6 @@ def get_processing_statistics(start_date, end_date):
         cur.execute("""
             SELECT
                 AVG(asr_duration) as avg_asr,
-                AVG(emotion_duration) as avg_emo,
                 AVG(llm_duration) as avg_llm,
                 AVG(total_duration) as avg_total
             FROM processing_stats
@@ -475,21 +473,20 @@ def check_evaluation_exists(linkedid, prompt_id, conn=None):
         with get_pg_connection() as conn:
             return _execute(conn)
 
-def insert_evaluation(linkedid, prompt_id, result_json, speech_emotion=None, conn=None):
+def insert_evaluation(linkedid, prompt_id, result_json, conn=None):
     def _execute(c):
         cur = c.cursor()
         cur.execute("""
             INSERT INTO evaluations (linkedid, prompt_id, politeness_score, client_sentiment,
-                                     call_purpose, call_summary, checklist_json, metrics_json, speech_emotions)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                     call_purpose, call_summary, checklist_json, metrics_json)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (linkedid, prompt_id) DO UPDATE SET
                 politeness_score = EXCLUDED.politeness_score,
                 client_sentiment = EXCLUDED.client_sentiment,
                 call_purpose = EXCLUDED.call_purpose,
                 call_summary = EXCLUDED.call_summary,
                 checklist_json = EXCLUDED.checklist_json,
-                metrics_json = EXCLUDED.metrics_json,
-                speech_emotions = COALESCE(EXCLUDED.speech_emotions, evaluations.speech_emotions)
+                metrics_json = EXCLUDED.metrics_json
         """, (
             linkedid,
             prompt_id,
@@ -498,8 +495,7 @@ def insert_evaluation(linkedid, prompt_id, result_json, speech_emotion=None, con
             result_json.get('call_purpose'),
             result_json.get('call_summary'),
             json.dumps(result_json.get('checklist', {})),
-            json.dumps(result_json.get('metrics', {})),
-            speech_emotion
+            json.dumps(result_json.get('metrics', {}))
         ))
         c.commit()
 

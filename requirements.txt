@@ -5,6 +5,7 @@ torchaudio>=2.3.0
 llama-cpp-python==0.2.90
 psycopg2-binary==2.9.9
 mysql-connector-python==8.0.33
+sqlalchemy>=2.0.0
 python-dotenv>=1.0.1
 streamlit==1.35.0
 pandas==2.2.2

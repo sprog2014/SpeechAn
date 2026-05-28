@@ -38,11 +38,12 @@ def apply_schema_updates():
             CHECK (processing_status IN ('new','processing','done','error','skipped'));
         """)
 
-        print("Adding speech_emotions column to evaluations...")
-        cur.execute("ALTER TABLE evaluations ADD COLUMN IF NOT EXISTS speech_emotions TEXT;")
-
-        print("Dropping speech_emotions table...")
+        print("Dropping speech_emotions table and column...")
         cur.execute("DROP TABLE IF EXISTS speech_emotions CASCADE;")
+        cur.execute("ALTER TABLE evaluations DROP COLUMN IF EXISTS speech_emotions;")
+
+        print("Updating processing_stats table...")
+        cur.execute("ALTER TABLE processing_stats DROP COLUMN IF EXISTS emotion_duration;")
 
         print("Creating processing_stats table...")
         cur.execute("""

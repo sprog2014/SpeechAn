@@ -10,8 +10,7 @@ from db_utils import (
     set_processing_duration, check_phone_usage, get_system_setting, is_phone_registered,
     insert_processing_stats, set_call_status
 )
-from asr import transcribe_audio
-from emotion import predict_emotion
+from asr import transcribe_with_vad
 from llm_analysis import analyze_transcript
 
 logger = logging.getLogger(__name__)
@@ -85,7 +84,6 @@ def process_file(file_path: str, prompt_id: int = None, force: bool = False):
             full_dialogue = ""
 
             asr_duration = 0
-            emotion_duration = 0
             llm_duration = 0
 
             if not transcript_exists:
@@ -116,35 +114,21 @@ def process_file(file_path: str, prompt_id: int = None, force: bool = False):
                     left_waveform = waveform[0]
                     right_waveform = waveform[1]
 
-                # Сводим каналы для эмоций
-                waveform_mixed = waveform.mean(dim=0)
                 logger.debug(f"[{linkedid}] Audio loaded in {time.time()-t0:.2f}s")
 
-                # 7. Транскрибация
+                # 7. Транскрибация и Эмоции
                 t_asr_start = time.time()
-                logger.info(f"[{linkedid}] Transcribing operator channel...")
-                left_segments = transcribe_audio(left_waveform, sr)
-                logger.info(f"[{linkedid}] Transcribing client channel...")
-                right_segments = transcribe_audio(right_waveform, sr)
+                logger.info(f"[{linkedid}] Transcribing with VAD segmentation...")
+                # Получаем сразу все сегменты из обоих каналов
+                combined_segments = transcribe_with_vad(left_waveform, right_waveform, sr)
                 asr_duration = time.time() - t_asr_start
 
-                # 8. Эмоции
-                t_emo_start = time.time()
-                logger.info(f"[{linkedid}] Analyzing emotions for mixed recording...")
-                speech_emotion = predict_emotion(waveform_mixed, sr)
-                emotion_duration = time.time() - t_emo_start
-
                 # Сохранение транскриптов
-                for start, end, text in left_segments:
-                    insert_transcript(linkedid, "operator", start, end, text, conn=pg_conn)
-                for start, end, text in right_segments:
-                    insert_transcript(linkedid, "client", start, end, text, conn=pg_conn)
-
                 all_segments = []
-                for start, end, text in left_segments:
-                    all_segments.append((start, f"Operator: {text}"))
-                for start, end, text in right_segments:
-                    all_segments.append((start, f"Client: {text}"))
+                for start, end, channel, text in combined_segments:
+                    insert_transcript(linkedid, channel, start, end, text, conn=pg_conn)
+                    label = "Operator" if channel == "operator" else "Client"
+                    all_segments.append((start, f"{label}: {text}"))
 
                 all_segments.sort(key=lambda x: x[0])
                 full_dialogue = "\n".join([s[1] for s in all_segments])
@@ -160,13 +144,7 @@ def process_file(file_path: str, prompt_id: int = None, force: bool = False):
                 logger.info(f"[{linkedid}] Starting LLM analysis (Dialogue length: {len(full_dialogue)} chars)")
                 eval_result = analyze_transcript(full_dialogue, prompt_template=current_prompt_text)
 
-                # Используем полученную эмоцию. Если транскрипт уже был,
-                # то эмоция может быть не определена в этой ветке (нужно обработать)
-                # В этом случае speech_emotion будет доступна из блока выше или None
-                if 'speech_emotion' not in locals():
-                    speech_emotion = None
-
-                insert_evaluation(linkedid, current_prompt_id, eval_result, speech_emotion=speech_emotion, conn=pg_conn)
+                insert_evaluation(linkedid, current_prompt_id, eval_result, conn=pg_conn)
                 llm_duration = time.time() - t_llm_start
                 logger.info(f"[{linkedid}] LLM analysis completed and saved")
             else:
@@ -177,7 +155,7 @@ def process_file(file_path: str, prompt_id: int = None, force: bool = False):
             set_processing_duration(linkedid, duration_total, conn=pg_conn)
 
             # Записываем статистику по этапам
-            insert_processing_stats(linkedid, asr_duration, emotion_duration, llm_duration, duration_total, conn=pg_conn)
+            insert_processing_stats(linkedid, asr_duration, llm_duration, duration_total, conn=pg_conn)
 
             logger.info(f"[{linkedid}] --- SUCCESS! Total time: {duration_total:.2f}s ---")
 
