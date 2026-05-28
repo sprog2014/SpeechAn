@@ -17,22 +17,6 @@ st.title("Аналитика звонков")
 
 from sqlalchemy import text
 
-# Обработка запроса на прослушивание файла
-if "linkedid" in st.query_params:
-    linkedid = st.query_params["linkedid"]
-    db_url = f"postgresql://{PG_CONFIG['user']}:{PG_CONFIG['password']}@{PG_CONFIG['host']}:{PG_CONFIG['port']}/{PG_CONFIG['dbname']}"
-    engine = create_engine(db_url)
-    with engine.connect() as conn:
-        res = conn.execute(text("SELECT file_path FROM calls WHERE linkedid = :lid"), {"lid": linkedid}).fetchone()
-        if res and res[0] and os.path.exists(res[0]):
-            st.info(f"Прослушивание записи для звонка: {linkedid}")
-            st.audio(res[0])
-            if st.button("Закрыть плеер", key="close_player_analytics"):
-                st.query_params.clear()
-                st.rerun()
-        else:
-            st.error("Файл записи не найден.")
-    engine.dispose()
 
 @st.cache_data(ttl=60)
 def get_summary_data():
@@ -80,9 +64,8 @@ else:
     # Обработка данных
     def process_row(row):
         # 1. Определение ролей
-        # Inbound: src is Client, answeredext is Operator
-        # Outbound: src is Operator, answeredext is Client
-        if row['direction'] == 'inbound':
+        # User: входящие называются incoming, остальные Operator is src
+        if row['direction'] == 'incoming':
             op_num = row['answeredext']
             cl_num = row['src']
         else:
@@ -90,10 +73,7 @@ else:
             cl_num = row['answeredext']
 
         row['Имя оператора'] = phone_names.get(op_num, op_num)
-
-        # 2. Ссылка на запись
-        # Используем параметр cl в URL для отображения через regex в LinkColumn
-        row['Номер клиента'] = f"/?linkedid={row['linkedid']}&cl={cl_num}"
+        row['Номер клиента'] = cl_num
 
         # 3. Продолжительность мм:сс
         if pd.notnull(row['billsec']):
@@ -147,18 +127,33 @@ else:
     }, inplace=True)
 
     # Отображение таблицы
-    st.dataframe(
+    selection = st.dataframe(
         display_df,
         column_config={
             "Дата/время": st.column_config.DatetimeColumn("Дата/время", format="DD.MM.YYYY HH:mm"),
-            "Номер клиента": st.column_config.LinkColumn(
-                "Номер клиента",
-                help="Нажмите, чтобы прослушать запись",
-                display_text=r"cl=(.*)$"
-            )
         },
         hide_index=True,
+        on_select="rerun",
+        selection_mode="single_row"
     )
+
+    # Обработка выбора строки и вывод плеера
+    if selection and selection.selection.get("rows"):
+        selected_index = selection.selection["rows"][0]
+        selected_linkedid = processed_df.iloc[selected_index]['linkedid']
+
+        st.markdown("---")
+        st.subheader(f"Прослушивание записи: {selected_linkedid}")
+
+        db_url = f"postgresql://{PG_CONFIG['user']}:{PG_CONFIG['password']}@{PG_CONFIG['host']}:{PG_CONFIG['port']}/{PG_CONFIG['dbname']}"
+        engine = create_engine(db_url)
+        with engine.connect() as conn:
+            res = conn.execute(text("SELECT file_path FROM calls WHERE linkedid = :lid"), {"lid": selected_linkedid}).fetchone()
+            if res and res[0] and os.path.exists(res[0]):
+                st.audio(res[0])
+            else:
+                st.error("Файл записи не найден.")
+        engine.dispose()
 
     st.markdown("### Визуализация")
 
