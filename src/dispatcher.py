@@ -1,6 +1,7 @@
 import os
 import time
 import logging
+import multiprocessing
 import concurrent.futures
 from datetime import datetime, timedelta
 from config import RECORDS_ROOT, NUM_WORKERS
@@ -88,21 +89,27 @@ def task_done_callback(future):
         logger.error(f"[{linkedid}] Task generated an exception: {e}")
 
 def main():
-    # Инициализация глобальных моделей при старте
-    from models import get_asr_model, get_llm
     logger.info("Starting system initialization...")
-    logger.info("Pre-loading models into memory...")
-    get_asr_model()
-    get_llm()
-    logger.info("All models loaded. Starting main loop.")
+    # При использовании ProcessPoolExecutor не загружаем модели в родительском процессе,
+    # чтобы сэкономить память. Они будут загружены в каждом дочернем процессе.
     logger.info(f"Configuration: NUM_WORKERS={NUM_WORKERS}, RECORDS_ROOT={RECORDS_ROOT}")
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=NUM_WORKERS) as executor:
+    # Используем spawn для корректной инициализации моделей в подпроцессах
+    try:
+        multiprocessing.set_start_method('spawn', force=True)
+    except RuntimeError:
+        pass
+
+    with concurrent.futures.ProcessPoolExecutor(max_workers=NUM_WORKERS) as executor:
         while True:
             # Проверка статуса запуска системы
             if not get_system_running_status():
-                logger.info("System is in WAITING mode (is_running=false). Sleeping 10s.")
-                time.sleep(10)
+                if processing_now:
+                    logger.info(f"System is STOPPING. Waiting for {len(processing_now)} active tasks...")
+                else:
+                    # Уменьшаем время сна для большей отзывчивости на кнопку Запуск
+                    logger.info("System is in WAITING mode (is_running=false).")
+                time.sleep(5)
                 continue
 
             current_active = len(processing_now)
@@ -119,19 +126,20 @@ def main():
                         processing_now.add(linkedid)
 
                         logger.info(f"[{linkedid}] Submitting task for file: {f_path}")
+                        # Важно: process_file должна быть импортирована корректно
                         future = executor.submit(process_file, f_path)
                         future.linkedid = linkedid
                         future.add_done_callback(task_done_callback)
                 else:
                     if not processing_now:
-                        logger.info("No new files to process and no active tasks. Sleeping 10s.")
-                        time.sleep(10)
+                        logger.info("No new files to process and no active tasks. Sleeping 5s.")
+                        time.sleep(5)
                     else:
                         logger.debug("No new files found. Waiting for active tasks...")
-                        time.sleep(5)
+                        time.sleep(2)
             else:
                 logger.debug(f"Worker pool is full ({current_active} active). Waiting...")
-                time.sleep(10)
+                time.sleep(5)
 
 if __name__ == "__main__":
     main()

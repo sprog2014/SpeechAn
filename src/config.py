@@ -30,8 +30,8 @@ MYSQL_CONFIG = {
 }
 
 RECORDS_ROOT = os.getenv("RECORDS_ROOT", "/mnt/rec")
-NUM_WORKERS = int(os.getenv("NUM_WORKERS", 10))
-OMP_NUM_THREADS = os.getenv("OMP_NUM_THREADS", "8")
+NUM_WORKERS = int(os.getenv("NUM_WORKERS", 8))
+OMP_NUM_THREADS = os.getenv("OMP_NUM_THREADS", "10")
 
 WEB_USER = os.getenv("WEB_USER", "admin")
 WEB_PASSWORD = os.getenv("WEB_PASSWORD", "admin")

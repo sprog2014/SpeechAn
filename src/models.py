@@ -65,12 +65,7 @@ class LockedLlama:
         with self.lock:
             return self.llm.create_chat_completion(*args, **kwargs)
 
-_locked_llm = None
-_locked_llm_lock = threading.Lock()
-
 def get_locked_llm():
-    global _locked_llm
-    with _locked_llm_lock:
-        if _locked_llm is None:
-            _locked_llm = LockedLlama(get_llm())
-    return _locked_llm
+    # В многопроцессорном режиме блокировка не нужна, так как у каждого процесса своя модель.
+    # Оставляем имя функции для совместимости с worker.py
+    return get_llm()
