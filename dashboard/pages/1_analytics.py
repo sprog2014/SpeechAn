@@ -113,8 +113,54 @@ else:
 
     processed_df = df.apply(process_row, axis=1).reset_index(drop=True)
 
+    st.markdown("### Визуализация")
+    col1, col2 = st.columns(2)
+
+    # Подготовка данных для графиков
+    purpose_counts = processed_df['Цель звонка'].value_counts().reset_index()
+    purpose_counts.columns = ['Цель', 'Количество']
+    fig_purpose = px.bar(purpose_counts, x='Цель', y='Количество', color='Цель',
+                         labels={'Количество': 'Количество звонков', 'Цель': 'Цель звонка'})
+
+    sentiment_counts = processed_df['Настроение'].value_counts().reset_index()
+    sentiment_counts.columns = ['Настроение', 'Количество']
+    fig_sentiment = px.pie(sentiment_counts, values='Количество', names='Настроение',
+                           color='Настроение',
+                           color_discrete_map={
+                               'Положительное': 'green',
+                               'Нейтральное': 'blue',
+                               'Отрицательное': 'orange',
+                               'Конфликт': 'red'
+                           })
+
+    with col1:
+        st.subheader("Распределение целей звонков")
+        purpose_event = st.plotly_chart(fig_purpose, use_container_width=True, on_select="rerun", key="purpose_chart")
+
+    with col2:
+        st.subheader("Настроение клиентов")
+        sentiment_event = st.plotly_chart(fig_sentiment, use_container_width=True, on_select="rerun", key="sentiment_chart")
+
+    # Фильтрация данных
+    filtered_df = processed_df.copy()
+
+    if purpose_event and purpose_event.selection.get("points"):
+        selected_purpose = purpose_event.selection["points"][0].get("x")
+        if selected_purpose:
+            filtered_df = filtered_df[filtered_df['Цель звонка'] == selected_purpose]
+            st.info(f"Фильтр по цели: {selected_purpose}")
+
+    if sentiment_event and sentiment_event.selection.get("points"):
+        selected_sentiment = sentiment_event.selection["points"][0].get("label")
+        if selected_sentiment:
+            filtered_df = filtered_df[filtered_df['Настроение'] == selected_sentiment]
+            st.info(f"Фильтр по настроению: {selected_sentiment}")
+
+    st.markdown("---")
+    st.markdown("### Список звонков")
+
     # Выбор и переименование колонок для отображения
-    display_df = processed_df[[
+    display_df = filtered_df[[
         'calldate', 'Номер клиента', 'Имя оператора', 'Продолжительность',
         'Цель звонка', 'Настроение', 'call_summary',
         'Поздоровался', 'Представился', 'Согласована дата', 'Определена цель',
@@ -141,7 +187,8 @@ else:
     # Обработка выбора строки и вывод плеера
     if selection and selection.selection.rows:
         selected_index = selection.selection.rows[0]
-        selected_linkedid = processed_df.iloc[selected_index]['linkedid']
+        # Используем iloc на filtered_df, так как display_df соответствует filtered_df
+        selected_linkedid = filtered_df.iloc[selected_index]['linkedid']
 
         st.markdown("---")
         st.subheader(f"Прослушивание записи: {selected_linkedid}")
@@ -155,29 +202,3 @@ else:
             else:
                 st.error("Файл записи не найден.")
         engine.dispose()
-
-    st.markdown("### Визуализация")
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        st.subheader("Распределение целей звонков")
-        purpose_counts = processed_df['Цель звонка'].value_counts().reset_index()
-        purpose_counts.columns = ['Цель', 'Количество']
-        fig_purpose = px.bar(purpose_counts, x='Цель', y='Количество', color='Цель',
-                             labels={'Количество': 'Количество звонков', 'Цель': 'Цель звонка'})
-        st.plotly_chart(fig_purpose, use_container_width=True)
-
-    with col2:
-        st.subheader("Настроение клиентов")
-        sentiment_counts = processed_df['Настроение'].value_counts().reset_index()
-        sentiment_counts.columns = ['Настроение', 'Количество']
-        fig_sentiment = px.pie(sentiment_counts, values='Количество', names='Настроение',
-                               color='Настроение',
-                               color_discrete_map={
-                                   'Положительное': 'green',
-                                   'Нейтральное': 'blue',
-                                   'Отрицательное': 'orange',
-                                   'Конфликт': 'red'
-                               })
-        st.plotly_chart(fig_sentiment, use_container_width=True)
