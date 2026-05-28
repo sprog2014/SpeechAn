@@ -2,6 +2,7 @@ import os
 import time
 import logging
 import concurrent.futures
+from datetime import datetime, timedelta
 from config import RECORDS_ROOT, NUM_WORKERS
 from db_utils import get_pg_connection, get_system_running_status
 from worker import process_file
@@ -31,10 +32,11 @@ def scan_files():
 
             # Ищем те, что уже имеют оценку с этим дефолтным промптом
             # ИЛИ уже были обработаны/в процессе/с ошибкой (согласно статусу в calls)
+            # ИЛИ пропущены
             cur.execute("""
                 SELECT linkedid FROM evaluations WHERE prompt_id = %s
                 UNION
-                SELECT linkedid FROM calls WHERE processing_status IN ('processing', 'done', 'error')
+                SELECT linkedid FROM calls WHERE processing_status IN ('processing', 'done', 'error', 'skipped')
             """, (default_prompt_id,))
             processed = set(row[0] for row in cur.fetchall())
     except Exception as e:
@@ -44,13 +46,36 @@ def scan_files():
     logger.debug(f"Scanning directory: {RECORDS_ROOT}")
     files_to_process = []
 
-    # Итерируемся по иерархической структуре /YYYY/MM/DD/
-    for root, dirs, files in os.walk(RECORDS_ROOT):
-        for f in files:
-            if f.lower().endswith('.mp3'):
-                linkedid = os.path.splitext(f)[0]
-                if linkedid not in processed and linkedid not in processing_now:
-                    files_to_process.append(os.path.join(root, f))
+    # Ограничиваем сканирование двумя последними днями
+    today = datetime.now()
+    yesterday = today - timedelta(days=1)
+    target_days = [today, yesterday]
+
+    current_time = time.time()
+
+    for day in target_days:
+        day_path = os.path.join(RECORDS_ROOT, day.strftime("%Y/%m/%d"))
+        if not os.path.exists(day_path):
+            continue
+
+        for root, dirs, files in os.walk(day_path):
+            for f in files:
+                if f.lower().endswith('.mp3'):
+                    f_path = os.path.join(root, f)
+                    try:
+                        # Проверяем время последнего изменения файла
+                        mtime = os.path.getmtime(f_path)
+                        # Если файл изменен менее минуты назад, пропускаем его (ждем завершения записи/копирования)
+                        if current_time - mtime < 60:
+                            logger.debug(f"File {f} is too new, skipping for now.")
+                            continue
+
+                        linkedid = os.path.splitext(f)[0]
+                        if linkedid not in processed and linkedid not in processing_now:
+                            files_to_process.append(f_path)
+                    except Exception as e:
+                        logger.error(f"Error checking file {f_path}: {e}")
+
     return files_to_process
 
 def task_done_callback(future):
@@ -100,14 +125,14 @@ def main():
                         future.add_done_callback(task_done_callback)
                 else:
                     if not processing_now:
-                        logger.info("No new files to process and no active tasks. Sleeping 30s.")
-                        time.sleep(30)
+                        logger.info("No new files to process and no active tasks. Sleeping 10s.")
+                        time.sleep(10)
                     else:
                         logger.debug("No new files found. Waiting for active tasks...")
                         time.sleep(5)
             else:
                 logger.debug(f"Worker pool is full ({current_active} active). Waiting...")
-                time.sleep(5)
+                time.sleep(10)
 
 if __name__ == "__main__":
     main()
