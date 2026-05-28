@@ -104,22 +104,26 @@ def process_file(file_path: str, prompt_id: int = None, force: bool = False):
             logger.info(f"[{linkedid}] Loading audio and splitting channels")
             t0 = time.time()
             try:
-                # Используем torchaudio для загрузки сразу в тензоры
                 waveform, sr = torchaudio.load(file_path)
             except Exception as e:
                 logger.error(f"[{linkedid}] ABORT: torchaudio failed to load file: {e}")
                 set_call_error(linkedid, conn=pg_conn)
                 return
 
-            if waveform.shape[0] != 2:
+            # Инициализация переменных во избежание NameError
+            left_waveform = None
+            right_waveform = None
+            waveform_mixed = None
+
+            if waveform.shape[0] == 2:
+                left_waveform = waveform[0:1]
+                right_waveform = waveform[1:2]
+                waveform_mixed = torch.mean(waveform, dim=0)
+            else:
                 logger.warning(f"[{linkedid}] Audio is not stereo, shape: {waveform.shape}. Using as mixed.")
                 left_waveform = waveform
                 right_waveform = torch.zeros_like(left_waveform)
                 waveform_mixed = waveform[0]
-            else:
-                left_waveform = waveform[0:1] # [1, samples]
-                right_waveform = waveform[1:2]
-                waveform_mixed = torch.mean(waveform, dim=0) # [samples]
 
             logger.debug(f"[{linkedid}] Audio loaded in {time.time()-t0:.2f}s")
 

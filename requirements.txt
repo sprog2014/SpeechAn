@@ -1,4 +1,4 @@
-git+https://github.com/salute-developers/GigaAM.git
+gigaam @ git+https://github.com/salute-developers/GigaAM.git
 torchaudio>=2.3.0
 torch>=2.3.0
 pydub==0.25.1
