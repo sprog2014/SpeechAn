@@ -22,6 +22,10 @@ sudo add-apt-repository -y ppa:deadsnakes/ppa
 sudo apt update
 sudo apt install -y python3.12 python3.12-dev python3-pip
 
+# Set Python 3.12 as default python3
+sudo update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1
+sudo update-alternatives --set python3 /usr/bin/python3.12
+
 # 3. Структура папок
 echo "[3/7] Creating directory structure..."
 sudo mkdir -p $BASE_DIR/models
@@ -83,4 +87,12 @@ EOF
     echo ".env created in $BASE_DIR/.env"
 fi
 
+# 8. Systemd Service
+echo "[8/8] Setting up systemd service..."
+sudo cp $BASE_DIR/SpeechAn/call_analysis.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable call_analysis.service
+sudo systemctl restart call_analysis.service
+
 echo "=== Setup Complete! ==="
+echo "You can check service status with: sudo systemctl status call_analysis.service"
