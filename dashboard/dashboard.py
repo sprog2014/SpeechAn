@@ -38,6 +38,24 @@ def check_password():
 if not check_password():
     st.stop()
 
+# Обработка запроса на прослушивание файла (дублируем логику для работы ссылок из аналитики)
+if "linkedid" in st.query_params:
+    linkedid = st.query_params["linkedid"]
+    from sqlalchemy import create_engine, text
+    db_url = f"postgresql://{PG_CONFIG['user']}:{PG_CONFIG['password']}@{PG_CONFIG['host']}:{PG_CONFIG['port']}/{PG_CONFIG['dbname']}"
+    engine = create_engine(db_url)
+    with engine.connect() as conn:
+        res = conn.execute(text("SELECT file_path FROM calls WHERE linkedid = :lid"), {"lid": linkedid}).fetchone()
+        if res and res[0] and os.path.exists(res[0]):
+            st.info(f"Прослушивание записи для звонка: {linkedid}")
+            st.audio(res[0])
+            if st.button("Закрыть плеер", key="close_player_main"):
+                st.query_params.clear()
+                st.rerun()
+        else:
+            st.error("Файл записи не найден.")
+    engine.dispose()
+
 st.title("Система анализа речи")
 st.write("Добро пожаловать в панель управления и мониторинга.")
 
