@@ -15,14 +15,14 @@ if not st.session_state.get("password_correct", False):
 
 st.title("Аналитика звонков")
 
+from sqlalchemy import text
+
 # Обработка запроса на прослушивание файла
 if "linkedid" in st.query_params:
     linkedid = st.query_params["linkedid"]
     db_url = f"postgresql://{PG_CONFIG['user']}:{PG_CONFIG['password']}@{PG_CONFIG['host']}:{PG_CONFIG['port']}/{PG_CONFIG['dbname']}"
     engine = create_engine(db_url)
     with engine.connect() as conn:
-        # В SQLAlchemy 2.0+ нужно использовать text() для сырых запросов или правильные методы
-        from sqlalchemy import text
         res = conn.execute(text("SELECT file_path FROM calls WHERE linkedid = :lid"), {"lid": linkedid}).fetchone()
         if res and res[0] and os.path.exists(res[0]):
             st.info(f"Прослушивание записи для звонка: {linkedid}")
@@ -40,7 +40,7 @@ def get_summary_data():
     db_url = f"postgresql://{PG_CONFIG['user']}:{PG_CONFIG['password']}@{PG_CONFIG['host']}:{PG_CONFIG['port']}/{PG_CONFIG['dbname']}"
     engine = create_engine(db_url)
     with engine.connect() as conn:
-        df = pd.read_sql("""
+        df = pd.read_sql(text("""
         SELECT
             c.linkedid,
             c.calldate,
@@ -57,8 +57,8 @@ def get_summary_data():
         WHERE c.processing_status = 'done'
         ORDER BY c.calldate DESC
         LIMIT 500
-    """, conn)
-    conn.close()
+    """), conn)
+    engine.dispose()
     return df
 
 @st.cache_data(ttl=300)
@@ -66,7 +66,7 @@ def get_phone_names():
     db_url = f"postgresql://{PG_CONFIG['user']}:{PG_CONFIG['password']}@{PG_CONFIG['host']}:{PG_CONFIG['port']}/{PG_CONFIG['dbname']}"
     engine = create_engine(db_url)
     with engine.connect() as conn:
-        df_phones = pd.read_sql("SELECT number, name FROM phones", conn)
+        df_phones = pd.read_sql(text("SELECT number, name FROM phones"), conn)
     engine.dispose()
     return dict(zip(df_phones['number'], df_phones['name']))
 
@@ -80,12 +80,13 @@ else:
     # Обработка данных
     def process_row(row):
         # 1. Определение ролей
+        # User: для incoming бери номер клиента из answerdaxt, для outgoing из src
         if row['direction'] == 'inbound':
-            op_num = row['answeredext']
-            cl_num = row['src']
-        else:
             op_num = row['src']
             cl_num = row['answeredext']
+        else:
+            op_num = row['answeredext']
+            cl_num = row['src']
 
         row['Имя оператора'] = phone_names.get(op_num, op_num)
 

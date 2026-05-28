@@ -5,7 +5,7 @@ import os
 
 # Добавляем путь к src, чтобы найти config.py и db_utils.py
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src'))
-from config import WEB_USER, WEB_PASSWORD
+from config import WEB_USER, WEB_PASSWORD, PG_CONFIG
 
 st.set_page_config(page_title="Speech Analytics", layout="wide")
 
