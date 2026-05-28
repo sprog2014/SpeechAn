@@ -80,14 +80,27 @@ else:
     # Обработка данных
     def process_row(row):
         # 1. Определение ролей
-        # Inbound: src is Client, answeredext is Operator
-        # Outbound: src is Operator, answeredext is Client
-        if row['direction'] == 'inbound':
-            op_num = row['answeredext']
-            cl_num = row['src']
+        src = row['src']
+        dst = row['answeredext']
+
+        src_in_phones = src in phone_names
+        dst_in_phones = dst in phone_names
+
+        # Если только один номер в справочнике - это оператор
+        if src_in_phones and not dst_in_phones:
+            op_num = src
+            cl_num = dst
+        elif dst_in_phones and not src_in_phones:
+            op_num = dst
+            cl_num = src
         else:
-            op_num = row['src']
-            cl_num = row['answeredext']
+            # Если оба или ни одного - используем стандартную логику по направлению
+            if row['direction'] == 'inbound':
+                op_num = dst
+                cl_num = src
+            else:
+                op_num = src
+                cl_num = dst
 
         row['Имя оператора'] = phone_names.get(op_num, op_num)
 
