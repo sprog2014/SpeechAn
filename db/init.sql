@@ -3,7 +3,6 @@ CREATE DATABASE call_analysis;
 
 DROP TABLE IF EXISTS processing_stats;
 DROP TABLE IF EXISTS evaluations;
-DROP TABLE IF EXISTS transcripts;
 DROP TABLE IF EXISTS calls;
 DROP TABLE IF EXISTS phones;
 DROP TABLE IF EXISTS prompts;
@@ -38,13 +37,6 @@ CREATE TABLE transcripts (
 );
 CREATE INDEX idx_transcripts_linkedid ON transcripts(linkedid);
 
-CREATE TABLE speech_emotions (
-    id              BIGSERIAL PRIMARY KEY,
-    transcript_id   BIGINT REFERENCES transcripts(id) ON DELETE CASCADE,
-    emotion         TEXT NOT NULL,
-    confidence      REAL CHECK (confidence >= 0 AND confidence <= 1)
-);
-CREATE INDEX idx_emotions_transcript ON speech_emotions(transcript_id);
 
 CREATE TABLE prompts (
     id              SERIAL PRIMARY KEY,
