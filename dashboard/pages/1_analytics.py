@@ -134,7 +134,7 @@ else:
         },
         hide_index=True,
         on_select="rerun",
-        selection_mode="single_row"
+        selection_mode="single-row"
     )
 
     # Обработка выбора строки и вывод плеера
