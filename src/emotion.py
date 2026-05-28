@@ -1,5 +1,6 @@
 import torch
 import logging
+import numpy as np
 from models import get_emotion_model
 
 logger = logging.getLogger(__name__)
@@ -7,13 +8,9 @@ logger = logging.getLogger(__name__)
 def predict_emotion(audio_chunk, sample_rate=16000):
     """
     Принимает numpy-массив или torch.Tensor (1D), возвращает (emotion_label, confidence).
-    emotion_label: одна из ['neutral','positive','negative','other','speech'].
     """
-    # Минимум 400 отсчетов (25мс при 16кГц) для работы STFT
     MIN_SAMPLES = 400
-
     if len(audio_chunk) < MIN_SAMPLES:
-        logger.debug(f"Audio chunk too short ({len(audio_chunk)} samples), skipping emotion analysis.")
         return "neutral", 1.0
 
     try:
@@ -22,19 +19,14 @@ def predict_emotion(audio_chunk, sample_rate=16000):
             audio_chunk = torch.tensor(audio_chunk, dtype=torch.float32)
 
         if audio_chunk.ndim == 1:
-            audio_chunk = audio_chunk.unsqueeze(0)  # [1, samples]
+            audio_chunk = audio_chunk.unsqueeze(0)
 
-        # GigaAMEmo ожидает батч [batch, samples] и длины
         lengths = torch.tensor([audio_chunk.shape[1]])
 
         with torch.no_grad():
-            # В официальном пакете gigaam вызов модели возвращает промежуточные слои
             outputs = model(audio_chunk, lengths)
-
-            # Если это GigaAMEmo из пакета gigaam
             if isinstance(outputs, tuple):
                 features = outputs[0]
-                # Пулинг по времени (среднее)
                 pooled = features.mean(dim=-1)
                 logits = model.head(pooled)
             elif hasattr(outputs, 'logits'):
@@ -42,16 +34,52 @@ def predict_emotion(audio_chunk, sample_rate=16000):
             else:
                 logits = outputs
 
-            pred_id = torch.argmax(logits, dim=-1).item()
             probs = torch.softmax(logits, dim=-1)
+            pred_id = torch.argmax(logits, dim=-1).item()
             confidence = probs[0, pred_id].item()
 
-        # Дефолтные метки для GigaAMEmo
         emotion_labels = {0: 'neutral', 1: 'positive', 2: 'negative', 3: 'angry'}
         emotion = emotion_labels.get(pred_id, f"unknown_{pred_id}")
 
-        return emotion, confidence
+        return emotion, confidence, probs[0].tolist()
 
     except Exception as e:
         logger.error(f"Error during emotion prediction: {e}")
-        return "neutral", 0.0
+        return "neutral", 0.0, [0.0]*4
+
+def predict_emotions_full(audio_data, sample_rate=16000, chunk_sec=5):
+    """
+    Анализирует всё аудио целиком, нарезая на куски и усредняя вероятности.
+    Возвращает словарь с финальной эмоцией и вероятностями.
+    """
+    logger.info(f"Analyzing full audio emotions ({len(audio_data)} samples)")
+
+    chunk_samples = int(chunk_sec * sample_rate)
+    total_samples = len(audio_data)
+
+    all_probs = []
+
+    for start in range(0, total_samples, chunk_samples):
+        end = min(start + chunk_samples, total_samples)
+        chunk = audio_data[start:end]
+        if len(chunk) < 400:
+            continue
+
+        _, _, probs = predict_emotion(chunk, sample_rate)
+        all_probs.append(probs)
+
+    if not all_probs:
+        return {"emotion": "neutral", "confidence": 1.0, "probs": {}}
+
+    # Усредняем вероятности по всем кускам
+    avg_probs = np.mean(all_probs, axis=0)
+    pred_id = np.argmax(avg_probs)
+
+    emotion_labels = {0: 'neutral', 1: 'positive', 2: 'negative', 3: 'angry'}
+    final_emotion = emotion_labels.get(pred_id, "unknown")
+
+    return {
+        "emotion": final_emotion,
+        "confidence": float(avg_probs[pred_id]),
+        "all_probs": {emotion_labels[i]: float(avg_probs[i]) for i in range(len(avg_probs)) if i in emotion_labels}
+    }

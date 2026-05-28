@@ -427,21 +427,6 @@ def insert_transcript(linkedid, channel, start, end, text, conn=None):
         with get_pg_connection() as conn:
             return _execute(conn)
 
-def insert_emotion(transcript_id, emotion, confidence, conn=None):
-    def _execute(c):
-        cur = c.cursor()
-        cur.execute("""
-            INSERT INTO speech_emotions (transcript_id, emotion, confidence)
-            VALUES (%s, %s, %s)
-        """, (transcript_id, emotion, confidence))
-        c.commit()
-
-    if conn:
-        _execute(conn)
-    else:
-        with get_pg_connection() as conn:
-            _execute(conn)
-
 def get_default_prompt(conn=None):
     def _execute(c):
         cur = c.cursor(cursor_factory=RealDictCursor)
@@ -490,20 +475,21 @@ def check_evaluation_exists(linkedid, prompt_id, conn=None):
         with get_pg_connection() as conn:
             return _execute(conn)
 
-def insert_evaluation(linkedid, prompt_id, result_json, conn=None):
+def insert_evaluation(linkedid, prompt_id, result_json, speech_emotions=None, conn=None):
     def _execute(c):
         cur = c.cursor()
         cur.execute("""
             INSERT INTO evaluations (linkedid, prompt_id, politeness_score, client_sentiment,
-                                     call_purpose, call_summary, checklist_json, metrics_json)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                                     call_purpose, call_summary, checklist_json, metrics_json, speech_emotions)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (linkedid, prompt_id) DO UPDATE SET
                 politeness_score = EXCLUDED.politeness_score,
                 client_sentiment = EXCLUDED.client_sentiment,
                 call_purpose = EXCLUDED.call_purpose,
                 call_summary = EXCLUDED.call_summary,
                 checklist_json = EXCLUDED.checklist_json,
-                metrics_json = EXCLUDED.metrics_json
+                metrics_json = EXCLUDED.metrics_json,
+                speech_emotions = EXCLUDED.speech_emotions
         """, (
             linkedid,
             prompt_id,
@@ -512,7 +498,8 @@ def insert_evaluation(linkedid, prompt_id, result_json, conn=None):
             result_json.get('call_purpose'),
             result_json.get('call_summary'),
             json.dumps(result_json.get('checklist', {})),
-            json.dumps(result_json.get('metrics', {}))
+            json.dumps(result_json.get('metrics', {})),
+            json.dumps(speech_emotions if speech_emotions else {})
         ))
         c.commit()
 

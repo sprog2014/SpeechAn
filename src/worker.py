@@ -3,20 +3,37 @@ import logging
 import numpy as np
 import librosa
 import time
+import concurrent.futures
+import torch
+import torchaudio
 from db_utils import (
     fetch_call_metadata, upsert_call, set_call_done, set_call_error,
-    insert_transcript, insert_emotion, insert_evaluation, get_pg_connection,
+    insert_transcript, insert_evaluation, get_pg_connection,
     get_default_prompt, get_prompt_by_id, check_transcript_exists, check_evaluation_exists,
     set_processing_duration, check_phone_usage, get_system_setting, is_phone_registered,
     insert_processing_stats, set_call_status
 )
 from asr import transcribe_audio
-from emotion import predict_emotion
+from emotion import predict_emotions_full
 from llm_analysis import analyze_transcript
-import tempfile
-import soundfile as sf
 
 logger = logging.getLogger(__name__)
+
+def process_channel_asr(channel_name, waveform, sample_rate, linkedid):
+    """Функция для транскрибации одного канала (в памяти)"""
+    logger.info(f"[{linkedid}] Starting ASR for channel: {channel_name}")
+    try:
+        segments = transcribe_audio(waveform, sample_rate)
+
+        results = []
+        with get_pg_connection() as conn:
+            for start, end, text in segments:
+                insert_transcript(linkedid, channel_name, start, end, text, conn=conn)
+                results.append((start, f"{channel_name.capitalize()}: {text}"))
+        return results
+    except Exception as e:
+        logger.error(f"[{linkedid}] Error in ASR for channel {channel_name}: {e}")
+        return []
 
 def process_file(file_path: str, prompt_id: int = None, force: bool = False):
     base = os.path.basename(file_path)
@@ -91,20 +108,13 @@ def process_file(file_path: str, prompt_id: int = None, force: bool = False):
             llm_duration = 0
 
             if not transcript_exists:
-                # 6. Загрузка и разделение каналов
-                if not os.path.exists(file_path):
-                    logger.error(f"[{linkedid}] ABORT: Audio file not found at {file_path}")
-                    set_call_error(linkedid, conn=pg_conn)
-                    return
+                # Транскрибируем каналы параллельно в памяти
+                with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+                    future_asr_left = executor.submit(process_channel_asr, "operator", left_waveform, sr, linkedid)
+                    future_asr_right = executor.submit(process_channel_asr, "client", right_waveform, sr, linkedid)
 
-                logger.info(f"[{linkedid}] Loading audio and splitting channels")
-                t0 = time.time()
-                try:
-                    y, sr = librosa.load(file_path, sr=16000, mono=False)
-                except Exception as e:
-                    logger.error(f"[{linkedid}] ABORT: librosa failed to load file: {e}")
-                    set_call_error(linkedid, conn=pg_conn)
-                    return
+                    left_results = future_asr_left.result()
+                    right_results = future_asr_right.result()
 
                 if y.ndim != 2 or y.shape[0] != 2:
                     logger.warning(f"[{linkedid}] Audio is not stereo, shape: {y.shape}. Processing as mono.")
@@ -162,12 +172,13 @@ def process_file(file_path: str, prompt_id: int = None, force: bool = False):
                     all_segments.sort(key=lambda x: x[0])
                     full_dialogue = "\n".join([s[1] for s in all_segments])
             else:
-                logger.info(f"[{linkedid}] Transcript already exists in DB. Skipping ASR/Emotion.")
+                logger.info(f"[{linkedid}] Transcript already exists in DB. Skipping ASR.")
                 cur = pg_conn.cursor()
                 cur.execute("SELECT channel, text, start_time FROM transcripts WHERE linkedid = %s ORDER BY start_time", (linkedid,))
                 rows = cur.fetchall()
                 full_dialogue = "\n".join([f"{r[0].capitalize()}: {r[1]}" for r in rows])
 
+            # 8. LLM анализ
             if full_dialogue.strip():
                 t_llm_start = time.time()
                 logger.info(f"[{linkedid}] Starting LLM analysis (Dialogue length: {len(full_dialogue)} chars)")
@@ -197,7 +208,6 @@ def process_file(file_path: str, prompt_id: int = None, force: bool = False):
 
 if __name__ == "__main__":
     import sys
-    # Настройка логирования для прямого запуска воркера
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s [%(name)s] %(message)s')
     if len(sys.argv) != 2:
         print("Usage: python worker.py <path_to_mp3>")

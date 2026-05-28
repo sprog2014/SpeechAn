@@ -3,7 +3,7 @@ import threading
 import logging
 import warnings
 import gigaam
-from faster_whisper import WhisperModel
+import torch
 from llama_cpp import Llama
 
 # Подавляем FutureWarning от torch/gigaam
@@ -11,33 +11,29 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 
 logger = logging.getLogger(__name__)
 
-# Глобальные переменные
-_whisper_model = None
-_whisper_lock = threading.Lock()
+# Глобальные переменные для моделей
+_asr_model = None
+_asr_lock = threading.Lock()
 
 _emotion_model = None
 _emotion_lock = threading.Lock()
 
-_llm = None
+_llm_model = None
 _llm_lock = threading.Lock()
 
-def get_whisper():
-    global _whisper_model
-    with _whisper_lock:
-        if _whisper_model is None:
-            logger.info("Initializing Faster-Whisper model (large-v3-turbo)...")
+def get_asr_model():
+    global _asr_model
+    with _asr_lock:
+        if _asr_model is None:
+            model_name = "v3_e2e_ctc"
+            logger.info(f"Initializing GigaAM ASR model ({model_name})...")
             try:
-                _whisper_model = WhisperModel(
-                    "h2oai/faster-whisper-large-v3-turbo",
-                    device="cpu",
-                    compute_type="int8",
-                    cpu_threads=int(os.getenv("OMP_NUM_THREADS", 8))
-                )
-                logger.info("Faster-Whisper model loaded successfully")
+                _asr_model = gigaam.load_model(model_name)
+                logger.info("GigaAM ASR model loaded successfully")
             except Exception as e:
-                logger.error(f"Failed to load Faster-Whisper model: {e}")
+                logger.error(f"Failed to load GigaAM ASR model: {e}")
                 raise
-    return _whisper_model
+    return _asr_model
 
 def get_emotion_model():
     global _emotion_model
@@ -45,7 +41,6 @@ def get_emotion_model():
         if _emotion_model is None:
             logger.info("Initializing GigaAMEmo model...")
             try:
-                # Предупреждение о fp16 обычно летит из gigaam.load_model при работе на CPU
                 _emotion_model = gigaam.load_model('emo')
                 _emotion_model.eval()
                 logger.info("GigaAMEmo model loaded successfully")
@@ -55,17 +50,28 @@ def get_emotion_model():
     return _emotion_model
 
 def get_llm():
-    global _llm
+    """
+    Возвращает экземпляр LLM.
+    В многопроцессорной среде каждый воркер получит свой экземпляр.
+    В многопоточной среде внутри одного процесса используется блокировка.
+    """
+    global _llm_model
     with _llm_lock:
-        if _llm is None:
+        if _llm_model is None:
             model_path = os.getenv("LLM_MODEL_PATH", "models/model-q4_K.gguf")
-            logger.info(f"Initializing Llama model from {model_path}...")
+            if os.path.isdir(model_path):
+                for f in os.listdir(model_path):
+                    if f.endswith(".gguf"):
+                        model_path = os.path.join(model_path, f)
+                        break
+
+            n_threads = int(os.getenv("OMP_NUM_THREADS", 8))
+            logger.info(f"Initializing Llama model (n_threads={n_threads}) from {model_path}...")
             try:
-                _llm = Llama(
+                _llm_model = Llama(
                     model_path=model_path,
                     n_ctx=4096,
-                    n_threads=int(os.getenv("OMP_NUM_THREADS", 8)),
-                    # Указываем формат чата, если необходимо. Для Llama 3 обычно используется "llama-3"
+                    n_threads=n_threads,
                     chat_format="llama-3",
                     verbose=False
                 )
@@ -73,27 +79,31 @@ def get_llm():
             except Exception as e:
                 logger.error(f"Failed to load Llama model: {e}")
                 raise
-    return _llm
+    return _llm_model
 
 class LockedLlama:
-    def __init__(self, llm_instance):
-        self.llm = llm_instance
-        self.lock = threading.Lock()
-
-    def create_completion(self, *args, **kwargs):
-        with self.lock:
-            return self.llm.create_completion(*args, **kwargs)
+    """Обертка для потокобезопасного использования LLM внутри одного процесса."""
+    def __init__(self):
+        self._lock = threading.Lock()
 
     def create_chat_completion(self, *args, **kwargs):
-        with self.lock:
-            return self.llm.create_chat_completion(*args, **kwargs)
+        model = get_llm()
+        with self._lock:
+            return model.create_chat_completion(*args, **kwargs)
 
-_locked_llm = None
-_locked_llm_lock = threading.Lock()
+    def create_completion(self, *args, **kwargs):
+        model = get_llm()
+        with self._lock:
+            return model.create_completion(*args, **kwargs)
+
+_locked_llm_instance = None
 
 def get_locked_llm():
-    global _locked_llm
-    with _locked_llm_lock:
-        if _locked_llm is None:
-            _locked_llm = LockedLlama(get_llm())
-    return _locked_llm
+    global _locked_llm_instance
+    if _locked_llm_instance is None:
+        _locked_llm_instance = LockedLlama()
+    return _locked_llm_instance
+
+# Для обратной совместимости
+def get_whisper():
+    return get_asr_model()
