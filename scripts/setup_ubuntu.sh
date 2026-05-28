@@ -7,7 +7,6 @@ REPO_URL="https://github.com/sprog2014/SpeechAn.git"
 DB_NAME="call_analysis"
 DB_USER="analyzer"
 DB_PASS="]=[-p0o"
-LLAMA_MODEL_URL="https://huggingface.co/IlyaGusev/saiga_llama3_8b_gguf/resolve/main/model-q4_K.gguf"
 
 echo "=== Speech Analytics Global Setup Script ==="
 
@@ -54,8 +53,20 @@ sudo python3.12 -m pip install -r $BASE_DIR/SpeechAn/requirements.txt --break-sy
 
 # 7. Загрузка модели и создание конфига
 echo "[7/7] Setup assets and config..."
-if [ ! -f "$BASE_DIR/models/model-q4_K.gguf" ]; then
-    wget -O $BASE_DIR/models/model-q4_K.gguf $LLAMA_MODEL_URL
+# Предварительная загрузка и конвертация модели Qwen2.5-7B-Instruct в OpenVINO INT8
+if [ ! -d "$BASE_DIR/models/qwen2.5-7b-instruct-ov" ]; then
+    echo "Downloading and converting Qwen2.5 model to OpenVINO INT8..."
+    # Используем временный скрипт для экспорта, так как зависимости уже установлены глобально
+    sudo python3.12 -c "
+from optimum.intel.openvino import OVModelForCausalLM
+from transformers import AutoTokenizer
+model_id = 'Qwen/Qwen2.5-7B-Instruct'
+save_path = '$BASE_DIR/models/qwen2.5-7b-instruct-ov'
+model = OVModelForCausalLM.from_pretrained(model_id, export=True, quantization_config={'bits': 8}, device='CPU')
+tokenizer = AutoTokenizer.from_pretrained(model_id)
+model.save_pretrained(save_path)
+tokenizer.save_pretrained(save_path)
+"
 fi
 
 if [ ! -f "$BASE_DIR/.env" ]; then
@@ -73,9 +84,9 @@ MYSQL_USER=umc
 MYSQL_PASSWORD=umc2pbx
 
 RECORDS_ROOT=/mnt/rec
-NUM_WORKERS=10
+NUM_WORKERS=4
 OMP_NUM_THREADS=8
-LLM_MODEL_PATH=$BASE_DIR/models/model-q4_K.gguf
+LLM_MODEL_PATH=$BASE_DIR/models/qwen2.5-7b-instruct-ov
 
 WEB_USER=admin
 WEB_PASSWORD=admin

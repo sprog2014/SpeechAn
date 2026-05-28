@@ -88,12 +88,8 @@ def analyze_transcript(transcript_text: str, prompt_template: str = None) -> dic
         )
         response = output['choices'][0]['message']['content']
     except Exception as e:
-        logger.error(f"Error during LLM chat completion: {e}")
-        # Попытка откатиться к простому completion если chat completion не поддерживается
-        logger.info("Retrying with simple completion...")
-        full_prompt = f"{SYSTEM_PROMPT}\n\n{user_message}"
-        output = llm.create_completion(full_prompt, max_tokens=1000, temperature=0.1)
-        response = output['choices'][0]['text']
+        logger.error(f"Error during LLM generation: {e}")
+        raise
 
     duration = time.time() - start_time
     logger.info(f"LLM analysis finished in {duration:.2f}s")
