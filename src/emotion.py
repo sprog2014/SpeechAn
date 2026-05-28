@@ -1,57 +1,68 @@
 import torch
 import logging
+from collections import Counter
 from models import get_emotion_model
 
 logger = logging.getLogger(__name__)
 
-def predict_emotion(audio_chunk, sample_rate=16000):
+def predict_emotion(waveform: torch.Tensor, sample_rate: int = 16000, chunk_sec: int = 10, overlap_sec: int = 2):
     """
-    Принимает numpy-массив или torch.Tensor (1D), возвращает (emotion_label, confidence).
-    emotion_label: одна из ['neutral','positive','negative','other','speech'].
+    Принимает mono аудио тензор, нарезает на куски, анализирует каждый
+    и возвращает наиболее часто встречающуюся эмоцию.
     """
+    if waveform.ndim > 1:
+        waveform = waveform.mean(dim=0)
+
+    total_samples = waveform.shape[0]
+    chunk_samples = chunk_sec * sample_rate
+    overlap_samples = overlap_sec * sample_rate
+    step_samples = chunk_samples - overlap_samples
+
     # Минимум 400 отсчетов (25мс при 16кГц) для работы STFT
     MIN_SAMPLES = 400
 
-    if len(audio_chunk) < MIN_SAMPLES:
-        logger.debug(f"Audio chunk too short ({len(audio_chunk)} samples), skipping emotion analysis.")
-        return "neutral", 1.0
+    if total_samples < MIN_SAMPLES:
+        return "neutral"
 
-    try:
-        model = get_emotion_model()
-        if not isinstance(audio_chunk, torch.Tensor):
-            audio_chunk = torch.tensor(audio_chunk, dtype=torch.float32)
+    model = get_emotion_model()
+    emotions_found = []
 
-        if audio_chunk.ndim == 1:
-            audio_chunk = audio_chunk.unsqueeze(0)  # [1, samples]
+    start_samp = 0
+    while start_samp < total_samples:
+        end_samp = min(start_samp + chunk_samples, total_samples)
+        chunk = waveform[start_samp:end_samp]
 
-        # GigaAMEmo ожидает батч [batch, samples] и длины
-        lengths = torch.tensor([audio_chunk.shape[1]])
+        if len(chunk) >= MIN_SAMPLES:
+            # Подготовка для модели
+            input_tensor = chunk.unsqueeze(0)  # [1, samples]
+            lengths = torch.tensor([input_tensor.shape[1]])
 
-        with torch.no_grad():
-            # В официальном пакете gigaam вызов модели возвращает промежуточные слои
-            outputs = model(audio_chunk, lengths)
+            with torch.no_grad():
+                outputs = model(input_tensor, lengths)
 
-            # Если это GigaAMEmo из пакета gigaam
-            if isinstance(outputs, tuple):
-                features = outputs[0]
-                # Пулинг по времени (среднее)
-                pooled = features.mean(dim=-1)
-                logits = model.head(pooled)
-            elif hasattr(outputs, 'logits'):
-                logits = outputs.logits
-            else:
-                logits = outputs
+                # Логика извлечения логитов (из оригинального emotion.py)
+                if isinstance(outputs, tuple):
+                    features = outputs[0]
+                    pooled = features.mean(dim=-1)
+                    logits = model.head(pooled)
+                elif hasattr(outputs, 'logits'):
+                    logits = outputs.logits
+                else:
+                    logits = outputs
 
-            pred_id = torch.argmax(logits, dim=-1).item()
-            probs = torch.softmax(logits, dim=-1)
-            confidence = probs[0, pred_id].item()
+                pred_id = torch.argmax(logits, dim=-1).item()
 
-        # Дефолтные метки для GigaAMEmo
-        emotion_labels = {0: 'neutral', 1: 'positive', 2: 'negative', 3: 'angry'}
-        emotion = emotion_labels.get(pred_id, f"unknown_{pred_id}")
+                emotion_labels = {0: 'neutral', 1: 'positive', 2: 'negative', 3: 'angry'}
+                emotions_found.append(emotion_labels.get(pred_id, 'neutral'))
 
-        return emotion, confidence
+        if end_samp == total_samples:
+            break
+        start_samp += step_samples
 
-    except Exception as e:
-        logger.error(f"Error during emotion prediction: {e}")
-        return "neutral", 0.0
+    if not emotions_found:
+        return "neutral"
+
+    # Возвращаем самую частую эмоцию
+    most_common = Counter(emotions_found).most_common(1)[0][0]
+    logger.info(f"Emotion analysis finished. Samples: {len(emotions_found)}, Winner: {most_common}")
+    return most_common

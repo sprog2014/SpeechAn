@@ -1,11 +1,11 @@
 import os
 import logging
-import numpy as np
-import librosa
+import torch
+import torchaudio
 import time
 from db_utils import (
     fetch_call_metadata, upsert_call, set_call_done, set_call_error,
-    insert_transcript, insert_emotion, insert_evaluation, get_pg_connection,
+    insert_transcript, insert_evaluation, get_pg_connection,
     get_default_prompt, get_prompt_by_id, check_transcript_exists, check_evaluation_exists,
     set_processing_duration, check_phone_usage, get_system_setting, is_phone_registered,
     insert_processing_stats, set_call_status
@@ -13,8 +13,6 @@ from db_utils import (
 from asr import transcribe_audio
 from emotion import predict_emotion
 from llm_analysis import analyze_transcript
-import tempfile
-import soundfile as sf
 
 logger = logging.getLogger(__name__)
 
@@ -100,67 +98,56 @@ def process_file(file_path: str, prompt_id: int = None, force: bool = False):
                 logger.info(f"[{linkedid}] Loading audio and splitting channels")
                 t0 = time.time()
                 try:
-                    y, sr = librosa.load(file_path, sr=16000, mono=False)
+                    # GigaAM ожидает 16кГц
+                    waveform, sr = torchaudio.load(file_path)
+                    if sr != 16000:
+                        waveform = torchaudio.transforms.Resample(orig_freq=sr, new_freq=16000)(waveform)
+                        sr = 16000
                 except Exception as e:
-                    logger.error(f"[{linkedid}] ABORT: librosa failed to load file: {e}")
+                    logger.error(f"[{linkedid}] ABORT: torchaudio failed to load file: {e}")
                     set_call_error(linkedid, conn=pg_conn)
                     return
 
-                if y.ndim != 2 or y.shape[0] != 2:
-                    logger.warning(f"[{linkedid}] Audio is not stereo, shape: {y.shape}. Processing as mono.")
-                    left_y = y if y.ndim == 1 else y[0]
-                    right_y = np.zeros_like(left_y)
+                if waveform.shape[0] != 2:
+                    logger.warning(f"[{linkedid}] Audio is not stereo, shape: {waveform.shape}. Processing as mono.")
+                    left_waveform = waveform[0]
+                    right_waveform = torch.zeros_like(left_waveform)
                 else:
-                    left_y = y[0]
-                    right_y = y[1]
+                    left_waveform = waveform[0]
+                    right_waveform = waveform[1]
+
+                # Сводим каналы для эмоций
+                waveform_mixed = waveform.mean(dim=0)
                 logger.debug(f"[{linkedid}] Audio loaded in {time.time()-t0:.2f}s")
 
-                with tempfile.TemporaryDirectory() as tmpdir:
-                    left_path = os.path.join(tmpdir, "left.wav")
-                    right_path = os.path.join(tmpdir, "right.wav")
+                # 7. Транскрибация
+                t_asr_start = time.time()
+                logger.info(f"[{linkedid}] Transcribing operator channel...")
+                left_segments = transcribe_audio(left_waveform, sr)
+                logger.info(f"[{linkedid}] Transcribing client channel...")
+                right_segments = transcribe_audio(right_waveform, sr)
+                asr_duration = time.time() - t_asr_start
 
-                    sf.write(left_path, left_y, sr)
-                    sf.write(right_path, right_y, sr)
+                # 8. Эмоции
+                t_emo_start = time.time()
+                logger.info(f"[{linkedid}] Analyzing emotions for mixed recording...")
+                speech_emotion = predict_emotion(waveform_mixed, sr)
+                emotion_duration = time.time() - t_emo_start
 
-                    # 7. Транскрибация
-                    t_asr_start = time.time()
-                    logger.info(f"[{linkedid}] Transcribing operator channel...")
-                    left_segments = transcribe_audio(left_path)
-                    logger.info(f"[{linkedid}] Transcribing client channel...")
-                    right_segments = transcribe_audio(right_path)
-                    asr_duration = time.time() - t_asr_start
+                # Сохранение транскриптов
+                for start, end, text in left_segments:
+                    insert_transcript(linkedid, "operator", start, end, text, conn=pg_conn)
+                for start, end, text in right_segments:
+                    insert_transcript(linkedid, "client", start, end, text, conn=pg_conn)
 
-                    # 8. Эмоции + сохранение
-                    t_emo_start = time.time()
-                    def process_segments(segments, channel, audio_data, sample_rate, call_linkedid, db_conn):
-                        logger.info(f"[{call_linkedid}] Analyzing emotions for {channel} ({len(segments)} segments)")
-                        transcript_texts = []
-                        for start, end, text in segments:
-                            start_samp = int(start * sample_rate)
-                            end_samp = int(end * sample_rate)
-                            chunk = audio_data[start_samp:end_samp]
+                all_segments = []
+                for start, end, text in left_segments:
+                    all_segments.append((start, f"Operator: {text}"))
+                for start, end, text in right_segments:
+                    all_segments.append((start, f"Client: {text}"))
 
-                            if len(chunk) == 0:
-                                continue
-
-                            emotion, conf = predict_emotion(chunk, sample_rate)
-                            tid = insert_transcript(call_linkedid, channel, start, end, text, conn=db_conn)
-                            insert_emotion(tid, emotion, conf, conn=db_conn)
-                            transcript_texts.append(f"{channel}: [{start:.2f}-{end:.2f}] {text} (эмоция: {emotion})")
-                        return transcript_texts
-
-                    process_segments(left_segments, "operator", left_y, sr, linkedid, pg_conn)
-                    process_segments(right_segments, "client", right_y, sr, linkedid, pg_conn)
-                    emotion_duration = time.time() - t_emo_start
-
-                    all_segments = []
-                    for start, end, text in left_segments:
-                        all_segments.append((start, f"Operator: {text}"))
-                    for start, end, text in right_segments:
-                        all_segments.append((start, f"Client: {text}"))
-
-                    all_segments.sort(key=lambda x: x[0])
-                    full_dialogue = "\n".join([s[1] for s in all_segments])
+                all_segments.sort(key=lambda x: x[0])
+                full_dialogue = "\n".join([s[1] for s in all_segments])
             else:
                 logger.info(f"[{linkedid}] Transcript already exists in DB. Skipping ASR/Emotion.")
                 cur = pg_conn.cursor()
@@ -172,7 +159,14 @@ def process_file(file_path: str, prompt_id: int = None, force: bool = False):
                 t_llm_start = time.time()
                 logger.info(f"[{linkedid}] Starting LLM analysis (Dialogue length: {len(full_dialogue)} chars)")
                 eval_result = analyze_transcript(full_dialogue, prompt_template=current_prompt_text)
-                insert_evaluation(linkedid, current_prompt_id, eval_result, conn=pg_conn)
+
+                # Используем полученную эмоцию. Если транскрипт уже был,
+                # то эмоция может быть не определена в этой ветке (нужно обработать)
+                # В этом случае speech_emotion будет доступна из блока выше или None
+                if 'speech_emotion' not in locals():
+                    speech_emotion = None
+
+                insert_evaluation(linkedid, current_prompt_id, eval_result, speech_emotion=speech_emotion, conn=pg_conn)
                 llm_duration = time.time() - t_llm_start
                 logger.info(f"[{linkedid}] LLM analysis completed and saved")
             else:

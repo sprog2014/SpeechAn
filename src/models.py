@@ -3,7 +3,6 @@ import threading
 import logging
 import warnings
 import gigaam
-from faster_whisper import WhisperModel
 from llama_cpp import Llama
 
 # Подавляем FutureWarning от torch/gigaam
@@ -12,8 +11,8 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 logger = logging.getLogger(__name__)
 
 # Глобальные переменные
-_whisper_model = None
-_whisper_lock = threading.Lock()
+_asr_model = None
+_asr_lock = threading.Lock()
 
 _emotion_model = None
 _emotion_lock = threading.Lock()
@@ -21,23 +20,19 @@ _emotion_lock = threading.Lock()
 _llm = None
 _llm_lock = threading.Lock()
 
-def get_whisper():
-    global _whisper_model
-    with _whisper_lock:
-        if _whisper_model is None:
-            logger.info("Initializing Faster-Whisper model (large-v3-turbo)...")
+def get_asr_model():
+    global _asr_model
+    with _asr_lock:
+        if _asr_model is None:
+            logger.info("Initializing GigaAM ASR model (v3_e2e_ctc)...")
             try:
-                _whisper_model = WhisperModel(
-                    "h2oai/faster-whisper-large-v3-turbo",
-                    device="cpu",
-                    compute_type="int8",
-                    cpu_threads=int(os.getenv("OMP_NUM_THREADS", 8))
-                )
-                logger.info("Faster-Whisper model loaded successfully")
+                _asr_model = gigaam.load_model('v3_e2e_ctc')
+                _asr_model.eval()
+                logger.info("GigaAM ASR model loaded successfully")
             except Exception as e:
-                logger.error(f"Failed to load Faster-Whisper model: {e}")
+                logger.error(f"Failed to load GigaAM ASR model: {e}")
                 raise
-    return _whisper_model
+    return _asr_model
 
 def get_emotion_model():
     global _emotion_model

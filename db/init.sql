@@ -3,7 +3,6 @@ CREATE DATABASE call_analysis;
 
 DROP TABLE IF EXISTS processing_stats;
 DROP TABLE IF EXISTS evaluations;
-DROP TABLE IF EXISTS speech_emotions;
 DROP TABLE IF EXISTS transcripts;
 DROP TABLE IF EXISTS calls;
 DROP TABLE IF EXISTS phones;
@@ -99,6 +98,7 @@ CREATE TABLE evaluations (
     call_summary      TEXT,
     checklist_json    JSONB DEFAULT '{}',
     metrics_json      JSONB DEFAULT '{}',
+    speech_emotions   TEXT,
     created_at        TIMESTAMP DEFAULT now(),
     PRIMARY KEY (linkedid, prompt_id)
 );
