@@ -10,7 +10,7 @@ from db_utils import (
     set_processing_duration, check_phone_usage, get_system_setting, is_phone_registered,
     insert_processing_stats, set_call_status
 )
-from asr import transcribe_audio
+from asr import transcribe_with_vad
 from emotion import predict_emotion
 from llm_analysis import analyze_transcript
 
@@ -120,12 +120,11 @@ def process_file(file_path: str, prompt_id: int = None, force: bool = False):
                 waveform_mixed = waveform.mean(dim=0)
                 logger.debug(f"[{linkedid}] Audio loaded in {time.time()-t0:.2f}s")
 
-                # 7. Транскрибация
+                # 7. Транскрибация и Эмоции
                 t_asr_start = time.time()
-                logger.info(f"[{linkedid}] Transcribing operator channel...")
-                left_segments = transcribe_audio(left_waveform, sr)
-                logger.info(f"[{linkedid}] Transcribing client channel...")
-                right_segments = transcribe_audio(right_waveform, sr)
+                logger.info(f"[{linkedid}] Transcribing with VAD segmentation...")
+                # Получаем сразу все сегменты из обоих каналов
+                combined_segments = transcribe_with_vad(left_waveform, right_waveform, sr)
                 asr_duration = time.time() - t_asr_start
 
                 # 8. Эмоции
@@ -135,16 +134,11 @@ def process_file(file_path: str, prompt_id: int = None, force: bool = False):
                 emotion_duration = time.time() - t_emo_start
 
                 # Сохранение транскриптов
-                for start, end, text in left_segments:
-                    insert_transcript(linkedid, "operator", start, end, text, conn=pg_conn)
-                for start, end, text in right_segments:
-                    insert_transcript(linkedid, "client", start, end, text, conn=pg_conn)
-
                 all_segments = []
-                for start, end, text in left_segments:
-                    all_segments.append((start, f"Operator: {text}"))
-                for start, end, text in right_segments:
-                    all_segments.append((start, f"Client: {text}"))
+                for start, end, channel, text in combined_segments:
+                    insert_transcript(linkedid, channel, start, end, text, conn=pg_conn)
+                    label = "Operator" if channel == "operator" else "Client"
+                    all_segments.append((start, f"{label}: {text}"))
 
                 all_segments.sort(key=lambda x: x[0])
                 full_dialogue = "\n".join([s[1] for s in all_segments])

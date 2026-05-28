@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-import psycopg2
+from sqlalchemy import create_engine
 import sys
 import os
 
@@ -16,8 +16,11 @@ st.title("Аналитика звонков")
 
 @st.cache_data(ttl=60)
 def get_summary_data():
-    conn = psycopg2.connect(**PG_CONFIG)
-    df = pd.read_sql("""
+    # Формируем SQLAlchemy URL
+    db_url = f"postgresql://{PG_CONFIG['user']}:{PG_CONFIG['password']}@{PG_CONFIG['host']}:{PG_CONFIG['port']}/{PG_CONFIG['dbname']}"
+    engine = create_engine(db_url)
+    with engine.connect() as conn:
+        df = pd.read_sql("""
         SELECT c.linkedid, c.calldate, c.direction, c.billsec, c.moduleparams,
                e.politeness_score, e.client_sentiment, e.call_purpose, e.speech_emotions,
                e.checklist_json->>'greeting' as greeting,
