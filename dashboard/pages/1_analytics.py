@@ -111,7 +111,7 @@ else:
 
         return row
 
-    processed_df = df.apply(process_row, axis=1)
+    processed_df = df.apply(process_row, axis=1).reset_index(drop=True)
 
     # Выбор и переименование колонок для отображения
     display_df = processed_df[[
@@ -134,12 +134,13 @@ else:
         },
         hide_index=True,
         on_select="rerun",
-        selection_mode="single-row"
+        selection_mode="single-row",
+        key="calls_table"
     )
 
     # Обработка выбора строки и вывод плеера
-    if selection and selection.selection.get("rows"):
-        selected_index = selection.selection["rows"][0]
+    if selection and selection.selection.rows:
+        selected_index = selection.selection.rows[0]
         selected_linkedid = processed_df.iloc[selected_index]['linkedid']
 
         st.markdown("---")
