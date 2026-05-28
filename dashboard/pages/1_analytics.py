@@ -95,7 +95,8 @@ else:
             cl_num = src
         else:
             # Если оба или ни одного - используем стандартную логику по направлению
-            if row['direction'] == 'inbound':
+            # User: входящие называются incoming, исходящие outgoing
+            if row['direction'] == 'incoming':
                 op_num = dst
                 cl_num = src
             else:
@@ -106,7 +107,7 @@ else:
 
         # 2. Ссылка на запись
         # Используем параметр cl в URL для отображения через regex в LinkColumn
-        row['Номер клиента'] = f"/?linkedid={row['linkedid']}&cl={cl_num}"
+        row['Номер клиента'] = f"?linkedid={row['linkedid']}&cl={cl_num}"
 
         # 3. Продолжительность мм:сс
         if pd.notnull(row['billsec']):
