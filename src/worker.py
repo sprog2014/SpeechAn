@@ -4,47 +4,34 @@ import numpy as np
 import librosa
 import time
 import concurrent.futures
+import torch
+import torchaudio
 from db_utils import (
     fetch_call_metadata, upsert_call, set_call_done, set_call_error,
-    insert_transcript, insert_emotion, insert_evaluation, get_pg_connection,
+    insert_transcript, insert_evaluation, get_pg_connection,
     get_default_prompt, get_prompt_by_id, check_transcript_exists, check_evaluation_exists,
     set_processing_duration, check_phone_usage, get_system_setting, is_phone_registered
 )
 from asr import transcribe_audio
-from emotion import predict_emotion
+from emotion import predict_emotions_full
 from llm_analysis import analyze_transcript
-import tempfile
-import soundfile as sf
 
 logger = logging.getLogger(__name__)
 
-def process_channel(channel_name, audio_path, audio_data, sample_rate, linkedid):
-    """Функция для обработки одного канала (ASR + Эмоции)"""
-    logger.info(f"[{linkedid}] Starting processing for channel: {channel_name}")
+def process_channel_asr(channel_name, waveform, sample_rate, linkedid):
+    """Функция для транскрибации одного канала (в памяти)"""
+    logger.info(f"[{linkedid}] Starting ASR for channel: {channel_name}")
     try:
-        segments = transcribe_audio(audio_path)
-        logger.info(f"[{linkedid}] Analyzing emotions for {channel_name} ({len(segments)} segments)")
+        segments = transcribe_audio(waveform, sample_rate)
 
         results = []
-        # Нам нужно сохранять в БД, но pg_conn не потокобезопасен, если использовать один на всех.
-        # Поэтому открываем новое соединение внутри потока.
         with get_pg_connection() as conn:
             for start, end, text in segments:
-                start_samp = int(start * sample_rate)
-                end_samp = int(end * sample_rate)
-                chunk = audio_data[start_samp:end_samp]
-
-                if len(chunk) < 400: # Минимальный размер для STFT
-                    emotion, conf = "neutral", 1.0
-                else:
-                    emotion, conf = predict_emotion(chunk, sample_rate)
-
-                tid = insert_transcript(linkedid, channel_name, start, end, text, conn=conn)
-                insert_emotion(tid, emotion, conf, conn=conn)
+                insert_transcript(linkedid, channel_name, start, end, text, conn=conn)
                 results.append((start, f"{channel_name.capitalize()}: {text}"))
         return results
     except Exception as e:
-        logger.error(f"[{linkedid}] Error processing channel {channel_name}: {e}")
+        logger.error(f"[{linkedid}] Error in ASR for channel {channel_name}: {e}")
         return []
 
 def process_file(file_path: str, prompt_id: int = None, force: bool = False):
@@ -92,7 +79,6 @@ def process_file(file_path: str, prompt_id: int = None, force: bool = False):
             src_num = metadata.get('src')
             dst_num = metadata.get('answeredext')
 
-            # Проверка на локальный звонок
             if get_system_setting('skip_local_calls', 'false', conn=pg_conn).lower() == 'true':
                 if is_phone_registered(src_num, conn=pg_conn) and is_phone_registered(dst_num, conn=pg_conn):
                     logger.info(f"[{linkedid}] SKIP: Local call between {src_num} and {dst_num} skipped.")
@@ -109,64 +95,66 @@ def process_file(file_path: str, prompt_id: int = None, force: bool = False):
             logger.debug(f"[{linkedid}] Upserting call record to PostgreSQL")
             upsert_call(metadata, file_path, conn=pg_conn)
 
-            # 5. Проверяем наличие транскрипции
+            # 5. Загрузка аудио в память
+            if not os.path.exists(file_path):
+                logger.error(f"[{linkedid}] ABORT: Audio file not found at {file_path}")
+                set_call_error(linkedid, conn=pg_conn)
+                return
+
+            logger.info(f"[{linkedid}] Loading audio and splitting channels")
+            t0 = time.time()
+            try:
+                # Используем torchaudio для загрузки сразу в тензоры
+                waveform, sr = torchaudio.load(file_path)
+            except Exception as e:
+                logger.error(f"[{linkedid}] ABORT: torchaudio failed to load file: {e}")
+                set_call_error(linkedid, conn=pg_conn)
+                return
+
+            if waveform.shape[0] != 2:
+                logger.warning(f"[{linkedid}] Audio is not stereo, shape: {waveform.shape}. Using as mixed.")
+                left_waveform = waveform
+                right_waveform = torch.zeros_like(left_waveform)
+                waveform_mixed = waveform[0]
+            else:
+                left_waveform = waveform[0:1] # [1, samples]
+                right_waveform = waveform[1:2]
+                waveform_mixed = torch.mean(waveform, dim=0) # [samples]
+
+            logger.debug(f"[{linkedid}] Audio loaded in {time.time()-t0:.2f}s")
+
+            # 6. Анализ эмоций (в памяти)
+            logger.info(f"[{linkedid}] Analyzing full call emotions...")
+            speech_emotions = predict_emotions_full(waveform_mixed.numpy(), sr)
+
+            # 7. Транскрибация (в памяти)
             transcript_exists = check_transcript_exists(linkedid, conn=pg_conn)
             full_dialogue = ""
 
             if not transcript_exists:
-                # 6. Загрузка и разделение каналов
-                if not os.path.exists(file_path):
-                    logger.error(f"[{linkedid}] ABORT: Audio file not found at {file_path}")
-                    set_call_error(linkedid, conn=pg_conn)
-                    return
+                # Транскрибируем каналы параллельно в памяти
+                with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+                    future_asr_left = executor.submit(process_channel_asr, "operator", left_waveform, sr, linkedid)
+                    future_asr_right = executor.submit(process_channel_asr, "client", right_waveform, sr, linkedid)
 
-                logger.info(f"[{linkedid}] Loading audio and splitting channels")
-                t0 = time.time()
-                try:
-                    y, sr = librosa.load(file_path, sr=16000, mono=False)
-                except Exception as e:
-                    logger.error(f"[{linkedid}] ABORT: librosa failed to load file: {e}")
-                    set_call_error(linkedid, conn=pg_conn)
-                    return
+                    left_results = future_asr_left.result()
+                    right_results = future_asr_right.result()
 
-                if y.ndim != 2 or y.shape[0] != 2:
-                    logger.warning(f"[{linkedid}] Audio is not stereo, shape: {y.shape}. Processing as mono.")
-                    left_y = y if y.ndim == 1 else y[0]
-                    right_y = np.zeros_like(left_y)
-                else:
-                    left_y = y[0]
-                    right_y = y[1]
-                logger.debug(f"[{linkedid}] Audio loaded in {time.time()-t0:.2f}s")
-
-                with tempfile.TemporaryDirectory() as tmpdir:
-                    left_path = os.path.join(tmpdir, "left.wav")
-                    right_path = os.path.join(tmpdir, "right.wav")
-
-                    sf.write(left_path, left_y, sr)
-                    sf.write(right_path, right_y, sr)
-
-                    # 7. Параллельная обработка каналов
-                    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-                        future_left = executor.submit(process_channel, "operator", left_path, left_y, sr, linkedid)
-                        future_right = executor.submit(process_channel, "client", right_path, right_y, sr, linkedid)
-
-                        left_results = future_left.result()
-                        right_results = future_right.result()
-
-                    all_segments = left_results + right_results
-                    all_segments.sort(key=lambda x: x[0])
-                    full_dialogue = "\n".join([s[1] for s in all_segments])
+                all_segments = left_results + right_results
+                all_segments.sort(key=lambda x: x[0])
+                full_dialogue = "\n".join([s[1] for s in all_segments])
             else:
-                logger.info(f"[{linkedid}] Transcript already exists in DB. Skipping ASR/Emotion.")
+                logger.info(f"[{linkedid}] Transcript already exists in DB. Skipping ASR.")
                 cur = pg_conn.cursor()
                 cur.execute("SELECT channel, text, start_time FROM transcripts WHERE linkedid = %s ORDER BY start_time", (linkedid,))
                 rows = cur.fetchall()
                 full_dialogue = "\n".join([f"{r[0].capitalize()}: {r[1]}" for r in rows])
 
+            # 8. LLM анализ
             if full_dialogue.strip():
-                logger.info(f"[{linkedid}] Starting LLM analysis (Dialogue length: {len(full_dialogue)} chars)")
+                logger.info(f"[{linkedid}] Starting LLM analysis")
                 eval_result = analyze_transcript(full_dialogue, prompt_template=current_prompt_text)
-                insert_evaluation(linkedid, current_prompt_id, eval_result, conn=pg_conn)
+                insert_evaluation(linkedid, current_prompt_id, eval_result, speech_emotions=speech_emotions, conn=pg_conn)
                 logger.info(f"[{linkedid}] LLM analysis completed and saved")
             else:
                 logger.warning(f"[{linkedid}] Empty transcript, skipping LLM analysis")
@@ -186,7 +174,6 @@ def process_file(file_path: str, prompt_id: int = None, force: bool = False):
 
 if __name__ == "__main__":
     import sys
-    # Настройка логирования для прямого запуска воркера
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s [%(name)s] %(message)s')
     if len(sys.argv) != 2:
         print("Usage: python worker.py <path_to_mp3>")

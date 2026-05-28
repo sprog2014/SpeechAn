@@ -32,16 +32,13 @@ MYSQL_CONFIG = {
 
 RECORDS_ROOT = os.getenv("RECORDS_ROOT", "/mnt/rec")
 
-# Динамическая настройка на основе ядер процессора
-# Цель: занять 100% процессора.
-# 80 ядер / 8 потоков на модель = 10 воркеров.
+# Динамическая настройка ресурсов
+# 80 ядер / 8 потоков = 10 воркеров.
+# При 10 воркерах каждый использует по 1 модели Llama (5ГБ) = 50ГБ.
+# Остается 14ГБ на ASR, Эмоции и ОС. Это предел, но должно работать.
 cpu_count = multiprocessing.cpu_count()
-default_workers = max(1, cpu_count // 8)
-default_threads = 8
-
-NUM_WORKERS = int(os.getenv("NUM_WORKERS", default_workers))
-OMP_NUM_THREADS = os.getenv("OMP_NUM_THREADS", str(default_threads))
-LLM_POOL_SIZE = int(os.getenv("LLM_POOL_SIZE", NUM_WORKERS))
+NUM_WORKERS = int(os.getenv("NUM_WORKERS", 10))
+OMP_NUM_THREADS = os.getenv("OMP_NUM_THREADS", "8")
 
 WEB_USER = os.getenv("WEB_USER", "admin")
 WEB_PASSWORD = os.getenv("WEB_PASSWORD", "admin")
