@@ -127,7 +127,12 @@ def insert_processing_stats(linkedid, asr_dur, llm_dur, total_dur, conn=None):
         with get_pg_connection() as conn:
             _execute(conn)
 
+from datetime import timedelta
+
 def get_processing_statistics(start_date, end_date):
+    # Корректируем end_date, чтобы захватить весь день
+    actual_end = end_date + timedelta(days=1)
+
     with get_pg_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
 
@@ -142,10 +147,10 @@ def get_processing_statistics(start_date, end_date):
                 ROUND(AVG(processing_duration) FILTER (WHERE processing_status = 'done')::numeric, 2) as avg_duration,
                 ROUND(SUM(processing_duration) FILTER (WHERE processing_status = 'done')::numeric, 2) as total_duration
             FROM calls
-            WHERE calldate >= %s AND calldate <= %s
+            WHERE calldate >= %s AND calldate < %s
             GROUP BY DATE(calldate)
             ORDER BY DATE(calldate) DESC
-        """, (start_date, end_date))
+        """, (start_date, actual_end))
         daily_stats = cur.fetchall()
 
         # 2. Скорость анализа: файлов в час
@@ -156,9 +161,9 @@ def get_processing_statistics(start_date, end_date):
                 COUNT(*) as count,
                 AVG(total_duration) as avg_total_duration
             FROM processing_stats
-            WHERE created_at >= %s AND created_at <= %s
+            WHERE created_at >= %s AND created_at < %s
             GROUP BY DATE(created_at)
-        """, (start_date, end_date))
+        """, (start_date, actual_end))
         speed_stats = cur.fetchall()
 
         # 3. Распределение по этапам
@@ -168,8 +173,8 @@ def get_processing_statistics(start_date, end_date):
                 AVG(llm_duration) as avg_llm,
                 AVG(total_duration) as avg_total
             FROM processing_stats
-            WHERE created_at >= %s AND created_at <= %s
-        """, (start_date, end_date))
+            WHERE created_at >= %s AND created_at < %s
+        """, (start_date, actual_end))
         timings = cur.fetchone()
 
         return {
