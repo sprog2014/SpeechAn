@@ -19,7 +19,7 @@ def get_summary_data():
     conn = psycopg2.connect(**PG_CONFIG)
     df = pd.read_sql("""
         SELECT c.linkedid, c.calldate, c.direction, c.billsec, c.moduleparams,
-               e.politeness_score, e.client_sentiment, e.call_purpose,
+               e.politeness_score, e.client_sentiment, e.call_purpose, e.speech_emotions,
                e.checklist_json->>'greeting' as greeting,
                e.checklist_json->>'farewell' as farewell
         FROM calls c

@@ -172,10 +172,14 @@ else:
             total = t['avg_total']
 
             labels = ['Транскрибация (ASR)', 'Эмоциональная оценка', 'LLM Анализ']
-            values = [t['avg_asr'], t['avg_emo'], t['avg_llm']]
+            values = [
+                t['avg_asr'] if t['avg_asr'] is not None else 0,
+                t['avg_emo'] if t['avg_emo'] is not None else 0,
+                t['avg_llm'] if t['avg_llm'] is not None else 0
+            ]
 
             # Процентное соотношение
-            percentages = [v/total * 100 for v in values]
+            percentages = [v/total * 100 if total > 0 else 0 for v in values]
 
             fig_pie = go.Figure(data=[go.Pie(labels=labels, values=values, hole=.3)])
             fig_pie.update_layout(title_text="Распределение времени по этапам")
@@ -185,9 +189,9 @@ else:
                 st.plotly_chart(fig_pie, use_container_width=True)
             with c2:
                 st.write("**Среднее время по этапам (сек):**")
-                st.write(f"- ASR: {t['avg_asr']:.2f} сек ({percentages[0]:.1f}%)")
-                st.write(f"- Emotion: {t['avg_emo']:.2f} сек ({percentages[1]:.1f}%)")
-                st.write(f"- LLM: {t['avg_llm']:.2f} сек ({percentages[2]:.1f}%)")
+                st.write(f"- ASR: {values[0]:.2f} сек ({percentages[0]:.1f}%)")
+                st.write(f"- Emotion: {values[1]:.2f} сек ({percentages[1]:.1f}%)")
+                st.write(f"- LLM: {values[2]:.2f} сек ({percentages[2]:.1f}%)")
                 st.write(f"**Итого в среднем на 1 файл:** {total:.2f} сек")
         else:
             st.write("Недостаточно данных для анализа этапов обработки")
