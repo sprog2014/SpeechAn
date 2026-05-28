@@ -6,11 +6,7 @@ import subprocess
 from datetime import datetime, timedelta
 
 # Добавляем путь к src
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-SRC_DIR = os.path.join(PROJECT_ROOT, 'src')
-if SRC_DIR not in sys.path:
-    sys.path.append(SRC_DIR)
-
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src'))
 from db_utils import (
     get_system_running_status, set_system_running_status,
     get_all_prompts, upsert_prompt, delete_prompt, set_default_prompt,
@@ -136,7 +132,42 @@ else:
             st.session_state.editing_prompt = None
             st.rerun()
 
-# --- Раздел 3: Ручной запуск ---
+# --- Раздел 3: Статистика ---
+st.header("Статистика обработки")
+
+@st.cache_data(ttl=60)
+def get_stats():
+    with get_pg_connection() as conn:
+        df_stats = pd.read_sql("""
+            SELECT
+                DATE(calldate) as "Дата",
+                COUNT(*) as "Кол-во звонков",
+                ROUND(AVG(processing_duration)::numeric, 2) as "Среднее время (сек)",
+                ROUND(SUM(processing_duration)::numeric, 2) as "Общее время (сек)"
+            FROM calls
+            WHERE processing_status = 'done'
+            GROUP BY DATE(calldate)
+            ORDER BY DATE(calldate) DESC
+        """, conn)
+
+        df_prompts_stats = pd.read_sql("""
+            SELECT p.name as "Название промпта", COUNT(e.linkedid) as "Использовано раз"
+            FROM prompts p
+            LEFT JOIN evaluations e ON p.id = e.prompt_id
+            GROUP BY p.name
+        """, conn)
+
+    return df_stats, df_prompts_stats
+
+df_stats, df_prompts_stats = get_stats()
+
+st.subheader("По дням")
+st.dataframe(df_stats, use_container_width=True)
+
+st.subheader("Использование промптов")
+st.dataframe(df_prompts_stats, use_container_width=True)
+
+# --- Раздел 4: Ручной запуск ---
 st.header("Ручной запуск")
 with st.form("manual_run_form"):
     date_start = st.date_input("Дата начала", datetime.now() - timedelta(days=1))
@@ -149,26 +180,20 @@ with st.form("manual_run_form"):
 
     if submit_manual:
         if selected_manual_prompt:
-            script_path = os.path.join(SRC_DIR, "manual_run.py")
             cmd = [
-                "python3", script_path,
+                "python3", "src/manual_run.py",
                 date_start.strftime("%Y-%m-%d"),
                 date_end.strftime("%Y-%m-%d"),
                 "--prompt_id", str(selected_manual_prompt),
                 "--ignore-stop-flag"
             ]
-
-            # Передаем окружение с PYTHONPATH
-            env = os.environ.copy()
-            env["PYTHONPATH"] = f"{env.get('PYTHONPATH', '')}:{PROJECT_ROOT}:{SRC_DIR}"
-
             # Не используем PIPE, чтобы избежать зависаний при переполнении буфера
-            process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env, cwd=PROJECT_ROOT)
+            process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             st.info(f"Процесс ручного запуска инициирован (PID: {process.pid}).")
         else:
             st.error("Выберите промпт для запуска.")
 
-# --- Раздел 4: Телефонный справочник ---
+# --- Раздел 5: Телефонный справочник ---
 st.header("Телефонный справочник")
 
 skip_local = get_system_setting('skip_local_calls', 'false').lower() == 'true'
