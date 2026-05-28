@@ -16,14 +16,15 @@ if not st.session_state.get("password_correct", False):
 st.title("Аналитика звонков")
 
 from sqlalchemy import text
-
+from datetime import datetime, timedelta
 
 @st.cache_data(ttl=60)
-def get_summary_data():
+def get_summary_data(start_date, end_date):
     # Формируем SQLAlchemy URL
     db_url = f"postgresql://{PG_CONFIG['user']}:{PG_CONFIG['password']}@{PG_CONFIG['host']}:{PG_CONFIG['port']}/{PG_CONFIG['dbname']}"
     engine = create_engine(db_url)
     with engine.connect() as conn:
+        # Увеличиваем end_date на 1 день для корректного захвата конца последнего дня
         df = pd.read_sql(text("""
         SELECT
             c.linkedid,
@@ -39,9 +40,10 @@ def get_summary_data():
         FROM calls c
         LEFT JOIN evaluations e ON c.linkedid = e.linkedid
         WHERE c.processing_status = 'done'
+          AND c.calldate >= :start
+          AND c.calldate < :end
         ORDER BY c.calldate DESC
-        LIMIT 500
-    """), conn)
+    """), conn, params={"start": start_date, "end": end_date + timedelta(days=1)})
     engine.dispose()
     return df
 
@@ -54,7 +56,18 @@ def get_phone_names():
     engine.dispose()
     return dict(zip(df_phones['number'], df_phones['name']))
 
-df = get_summary_data()
+# Выбор диапазона дат
+today = datetime.now().date()
+default_start = today - timedelta(days=7)
+date_range = st.date_input("Выберите диапазон дат", (default_start, today))
+
+if isinstance(date_range, tuple) and len(date_range) == 2:
+    start_date, end_date = date_range
+else:
+    st.info("Выберите диапазон дат (начало и конец).")
+    st.stop()
+
+df = get_summary_data(start_date, end_date)
 
 if df.empty:
     st.warning("Нет данных для отображения.")
