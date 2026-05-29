@@ -38,7 +38,8 @@ def get_summary_data(start_date, end_date):
             e.client_sentiment,
             e.call_purpose,
             e.call_summary,
-            e.checklist_json
+            e.checklist_json,
+            e.politeness_score
         FROM calls c
         LEFT JOIN evaluations e ON c.linkedid = e.linkedid
         WHERE c.processing_status = 'done'
@@ -181,7 +182,7 @@ else:
             st.session_state.show_table = False
             st.rerun()
 
-    col1, col2 = st.columns(2)
+    col1, col2, col_poly = st.columns(3)
 
     # 1. График целей
     df_p = get_filtered_df(exclude="purpose")
@@ -228,6 +229,20 @@ else:
                 st.session_state.filters["sentiment"] = sel
                 st.session_state.show_table = True
                 st.rerun()
+
+    # Линейный график вежливости
+    df_poly = get_filtered_df()
+    df_poly['date'] = df_poly['calldate'].dt.date
+    daily_politeness = df_poly.groupby('date')['politeness_score'].mean().reset_index()
+
+    fig_politeness = px.line(daily_politeness, x='date', y='politeness_score',
+                             labels={'politeness_score': 'Вежливость', 'date': 'Дата'},
+                             markers=True)
+    fig_politeness.update_layout(separators=", ")
+
+    with col_poly:
+        st.subheader("Вежливость по дням")
+        st.plotly_chart(fig_politeness, use_container_width=True)
 
     col3, col4 = st.columns(2)
 
