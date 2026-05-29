@@ -89,6 +89,15 @@ def task_done_callback(future):
 
 def main():
     logger.info("Starting system initialization...")
+
+    # Настройки OpenVINO для работы внутри одной NUMA-ноды
+    os.environ["OV_CPU_INFERENCE_NUM_THREADS"] = "10"
+    os.environ["OV_CPU_BIND_THREAD"] = "YES"
+
+    # Отключаем внутреннюю NUMA-балансировку самого OpenVINO,
+    # так как мы контролируем это вручную на уровне процессов
+    os.environ["OV_CPU_ENABLE_NUMA"] = "NO"
+
     # Ограничиваем количество потоков для библиотек, использующих OpenMP/MKL
     # Это должно быть сделано до импорта тяжелых библиотек в воркерах
     os.environ["OMP_NUM_THREADS"] = "1"
