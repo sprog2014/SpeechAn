@@ -9,7 +9,7 @@ import plotly.graph_objects as go
 # Добавляем путь к src, чтобы найти config.py
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src'))
 from config import PG_CONFIG
-from db_utils import get_all_prompts, get_default_prompt
+from db_utils import get_all_prompts, get_default_prompt, get_call_file_path, get_call_transcript
 
 if not st.session_state.get("password_correct", False):
     st.error("Пожалуйста, авторизуйтесь на главной странице.")
@@ -124,7 +124,7 @@ else:
             'outbound': '📤',
             'internal': '🏠'
         }
-        row['Тип звонка'] = dir_map.get(row['direction'], row['direction'])
+        row['Тип звонка'] = dir_map.get(str(row['direction']).lower(), '❓')
 
         # 3. Продолжительность мм:сс
         if pd.notnull(row['billsec']):
@@ -297,72 +297,52 @@ else:
     all_hours = pd.DataFrame({'hour': range(6, 23)})
 
     # 3. Распределение по часам (количество)
-    hourly_data = df_h[(df_h['hour'] >= 6) & (df_h['hour'] <= 22)]
+    hourly_data = df_h[(df_h['hour'] >= 6) & (df_h['hour'] <= 22)].copy()
 
     # Считаем общее кол-во по часам для отображения среднего значения на столбике
-    hourly_totals = hourly_data.groupby('hour').size().reset_index(name='total_count')
-    hourly_totals['avg'] = (hourly_totals['total_count'] / num_days).round(1)
+    hourly_totals = hourly_data.groupby('hour', observed=False).size().reset_index(name='count')
+    hourly_totals['avg'] = (hourly_totals['count'] / num_days).round(1)
     hourly_totals['avg_str'] = hourly_totals['avg'].apply(lambda x: str(x).replace('.', ','))
 
-    # Группируем по часам и типам звонков
-    hourly_counts = hourly_data.groupby(['hour', 'Тип звонка']).size().reset_index(name='count')
+    # Обеспечиваем наличие всех часов
+    all_hours_df = pd.DataFrame({'hour': range(6, 23)})
+    hourly_counts = all_hours_df.merge(hourly_totals, on='hour', how='left').fillna({'count': 0})
 
-    # Добавляем все часы и типы, чтобы графики не "прыгали"
-    call_types = ['Входящий', 'Исходящий', 'Внутренний']
-    full_index = pd.MultiIndex.from_product([range(6, 23), call_types], names=['hour', 'Тип звонка'])
-    hourly_counts = hourly_counts.set_index(['hour', 'Тип звонка']).reindex(full_index, fill_value=0).reset_index()
-
-    fig_h_count = px.bar(hourly_counts, x='hour', y='count', color='Тип звонка',
-                         labels={'count': 'Кол-во звонков', 'hour': 'Час', 'Тип звонка': 'Тип'},
-                         custom_data=['hour', 'Тип звонка'],
-                         color_discrete_map={
-                             '📥': 'green',
-                             '📤': 'blue',
-                             '🏠': 'orange'
-                         })
+    fig_h_count = px.bar(hourly_counts, x='hour', y='count',
+                         labels={'count': 'Кол-во звонков', 'hour': 'Час'},
+                         custom_data=['hour'])
+    fig_h_count.update_traces(marker_color='royalblue')
 
     # Добавляем среднее значение посередине всего столбика
-    for _, row_t in hourly_totals.iterrows():
-        if row_t['total_count'] > 0:
+    for _, row_t in hourly_counts.iterrows():
+        if row_t['count'] > 0:
+            avg_val = (row_t['count'] / num_days).round(1)
+            avg_str = str(avg_val).replace('.', ',')
             fig_h_count.add_annotation(
-                x=row_t['hour'], y=row_t['total_count']/2, text=row_t['avg_str'],
+                x=row_t['hour'], y=row_t['count']/2, text=avg_str,
                 showarrow=False, font=dict(color="white", size=12)
             )
 
-    fig_h_count.update_layout(xaxis={'tickmode': 'linear', 'tick0': 6, 'dtick': 1}, separators=", ", barmode='stack')
+    fig_h_count.update_layout(xaxis={'tickmode': 'linear', 'tick0': 6, 'dtick': 1}, separators=", ")
 
     # 4. Средняя продолжительность
     hourly_dur = df_h[(df_h['hour'] >= 6) & (df_h['hour'] <= 22)].groupby('hour')[['duration', 'billsec']].mean().reset_index()
     hourly_dur = all_hours.merge(hourly_dur, on='hour', how='left').fillna(0)
 
     def format_mmss(sec):
-        if sec <= 0: return ""
+        if sec <= 0: return "00:00"
         m, s = divmod(int(sec), 60)
         return f"{m:02d}:{s:02d}"
 
-    hourly_dur['duration_str'] = hourly_dur['duration'].apply(format_mmss)
     hourly_dur['billsec_str'] = hourly_dur['billsec'].apply(format_mmss)
 
-    fig_h_dur = go.Figure()
-    fig_h_dur.add_trace(go.Bar(
-        x=hourly_dur['hour'], y=hourly_dur['duration'], name='Ожидание + Разговор',
-        marker_color='rgba(100, 149, 237, 0.6)',
-        text=hourly_dur['duration_str'], textposition='inside',
-        hovertemplate="Ожидание + Разговор: %{text}<extra></extra>",
-        customdata=hourly_dur['hour']
-    ))
-    fig_h_dur.add_trace(go.Bar(
-        x=hourly_dur['hour'], y=hourly_dur['billsec'], name='Разговор',
-        marker_color='rgba(0, 0, 139, 0.8)',
-        text=hourly_dur['billsec_str'], textposition='inside',
-        hovertemplate="Разговор: %{text}<extra></extra>",
-        customdata=hourly_dur['hour']
-    ))
+    fig_h_dur = px.bar(hourly_dur, x='hour', y='billsec',
+                       labels={'billsec': 'Среднее время (сек)', 'hour': 'Час'},
+                       text='billsec_str',
+                       custom_data=['hour'])
+    fig_h_dur.update_traces(marker_color='indianred', textposition='inside')
     fig_h_dur.update_layout(
-        barmode='overlay',
-        xaxis={'title': 'Час', 'tickmode': 'linear', 'tick0': 6, 'dtick': 1},
-        yaxis={'title': 'Среднее время (сек)'},
-        legend={'orientation': 'h', 'yanchor': 'bottom', 'y': 1.02, 'xanchor': 'right', 'x': 1},
+        xaxis={'tickmode': 'linear', 'tick0': 6, 'dtick': 1},
         separators=", "
     )
 
@@ -371,21 +351,13 @@ else:
         hour_event = st.plotly_chart(fig_h_count, use_container_width=True, on_select="rerun", key="hour_chart")
         if hour_event and hour_event.selection.get("points"):
             point = hour_event.selection["points"][0]
-            h_sel = point.get("customdata", [None, None])[0] or point.get("x")
-            t_sel = point.get("customdata", [None, None])[1]
-            changed = False
+            h_sel = point.get("customdata", [None])[0] or point.get("x")
             if h_sel is not None:
                 h_sel = int(h_sel)
                 if h_sel != st.session_state.filters["hour"]:
                     st.session_state.filters["hour"] = h_sel
-                    changed = True
-            if t_sel is not None:
-                if t_sel != st.session_state.filters["type"]:
-                    st.session_state.filters["type"] = t_sel
-                    changed = True
-            if changed:
-                st.session_state.show_table = True
-                st.rerun()
+                    st.session_state.show_table = True
+                    st.rerun()
 
     with col4:
         st.subheader("Средняя длительность")
@@ -411,34 +383,32 @@ else:
         st.markdown(f"### Список звонков ({len(filtered_df)})")
 
         # Выбор и переименование колонок для отображения
+        status_map = {
+            'done': '✅',
+            'processing': '⏳',
+            'skipped': '⏭️',
+            'error': '❌',
+            'new': '🆕'
+        }
+        filtered_df['Статус'] = filtered_df['processing_status'].map(lambda x: status_map.get(x, '❓'))
+
         display_df = filtered_df[[
-            'calldate', 'Тип звонка', 'processing_status', 'Номер клиента', 'Имя оператора', 'Продолжительность',
+            'Статус', 'calldate', 'Тип звонка', 'Номер клиента', 'Имя оператора', 'Продолжительность',
             'Цель звонка', 'Настроение', 'call_summary',
             'Поздоровался', 'Представился', 'Согласована дата', 'Определена цель',
             'Озвучена цена', 'Жалоба решена', 'Попрощался'
         ]].copy()
-
-        status_map = {
-            'done': '✅ Ок',
-            'processing': '⏳ Обработка',
-            'skipped': '⏭️ Пропущено',
-            'error': '❌ Ошибка',
-            'new': '🆕 Новый'
-        }
-        display_df['Статус'] = display_df['processing_status'].map(lambda x: status_map.get(x, x))
 
         display_df.rename(columns={
             'calldate': 'Дата/время',
             'call_summary': 'Краткое содержание'
         }, inplace=True)
 
-        # Удаляем оригинал и оставляем маппинг
-        display_df.drop(columns=['processing_status'], inplace=True)
-
         # Отображение таблицы
         selection = st.dataframe(
             display_df,
             column_config={
+                "Статус": st.column_config.TextColumn("⚙️", help="Статус обработки"),
                 "Дата/время": st.column_config.DatetimeColumn("Дата/время", format="DD.MM.YYYY HH:mm"),
                 "Тип звонка": st.column_config.TextColumn("📞", help="Тип звонка"),
                 "Продолжительность": st.column_config.TextColumn("⏱️", help="Продолжительность"),
@@ -464,33 +434,22 @@ else:
             st.markdown("---")
             st.subheader(f"Прослушивание записи: {selected_linkedid}")
 
-            db_url = f"postgresql://{PG_CONFIG['user']}:{PG_CONFIG['password']}@{PG_CONFIG['host']}:{PG_CONFIG['port']}/{PG_CONFIG['dbname']}"
-            engine = create_engine(db_url)
-            with engine.connect() as conn:
-                # 1. Получаем путь к файлу
-                res = conn.execute(text("SELECT file_path FROM calls WHERE linkedid = :lid"), {"lid": selected_linkedid}).fetchone()
-                if res and res[0] and os.path.exists(res[0]):
-                    st.audio(res[0])
-                else:
-                    st.error("Файл записи не найден.")
+            # 1. Получаем путь к файлу
+            fpath = get_call_file_path(selected_linkedid)
+            if fpath and os.path.exists(fpath):
+                st.audio(fpath)
+            else:
+                st.error("Файл записи не найден.")
 
-                # 2. Добавляем расшифровку
-                st.markdown("#### Расшифровка звонка")
-                transcript_res = conn.execute(text("""
-                    SELECT channel, start_time, text
-                    FROM transcripts
-                    WHERE linkedid = :lid
-                    ORDER BY start_time ASC
-                """), {"lid": selected_linkedid})
+            # 2. Добавляем расшифровку
+            st.markdown("#### Расшифровка звонка")
+            transcript_rows = get_call_transcript(selected_linkedid)
 
-                rows = transcript_res.fetchall()
-                if rows:
-                    for row in rows:
-                        m, s = divmod(int(row.start_time), 60)
-                        time_str = f"[{m:02d}:{s:02d}]"
-                        label = "👤 **Оператор**" if row.channel == 'operator' else "👥 **Клиент**"
-                        st.markdown(f"{time_str} {label}: {row.text}")
-                else:
-                    st.info("Расшифровка для этого звонка отсутствует.")
-
-            engine.dispose()
+            if transcript_rows:
+                for trow in transcript_rows:
+                    m, s = divmod(int(trow['start_time']), 60)
+                    time_str = f"[{m:02d}:{s:02d}]"
+                    label = "👤 **Оператор**" if trow['channel'] == 'operator' else "👥 **Клиент**"
+                    st.markdown(f"{time_str} {label}: {trow['text']}")
+            else:
+                st.info("Расшифровка для этого звонка отсутствует.")

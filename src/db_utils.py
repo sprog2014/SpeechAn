@@ -481,6 +481,36 @@ def check_evaluation_exists(linkedid, prompt_id, conn=None):
         with get_pg_connection() as conn:
             return _execute(conn)
 
+def get_call_file_path(linkedid, conn=None):
+    def _execute(c):
+        cur = c.cursor()
+        cur.execute("SELECT file_path FROM calls WHERE linkedid = %s", (linkedid,))
+        row = cur.fetchone()
+        return row[0] if row else None
+
+    if conn:
+        return _execute(conn)
+    else:
+        with get_pg_connection() as conn:
+            return _execute(conn)
+
+def get_call_transcript(linkedid, conn=None):
+    def _execute(c):
+        cur = c.cursor(cursor_factory=RealDictCursor)
+        cur.execute("""
+            SELECT channel, start_time, text
+            FROM transcripts
+            WHERE linkedid = %s
+            ORDER BY start_time ASC
+        """, (linkedid,))
+        return cur.fetchall()
+
+    if conn:
+        return _execute(conn)
+    else:
+        with get_pg_connection() as conn:
+            return _execute(conn)
+
 def insert_evaluation(linkedid, prompt_id, result_json, conn=None):
     def _execute(c):
         cur = c.cursor()
