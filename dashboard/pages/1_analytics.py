@@ -36,6 +36,7 @@ def get_summary_data(start_date, end_date, prompt_id):
             c.duration,
             c.src,
             c.answeredext,
+            c.processing_status,
             e.client_sentiment,
             e.call_purpose,
             e.call_summary,
@@ -43,8 +44,7 @@ def get_summary_data(start_date, end_date, prompt_id):
             e.politeness_score
         FROM calls c
         LEFT JOIN evaluations e ON c.linkedid = e.linkedid AND e.prompt_id = :pid
-        WHERE c.processing_status = 'done'
-          AND c.calldate >= :start
+        WHERE c.calldate >= :start
           AND c.calldate < :end
         ORDER BY c.calldate DESC
     """), conn, params={
@@ -412,16 +412,28 @@ else:
 
         # Выбор и переименование колонок для отображения
         display_df = filtered_df[[
-            'calldate', 'Тип звонка', 'Номер клиента', 'Имя оператора', 'Продолжительность',
+            'calldate', 'Тип звонка', 'processing_status', 'Номер клиента', 'Имя оператора', 'Продолжительность',
             'Цель звонка', 'Настроение', 'call_summary',
             'Поздоровался', 'Представился', 'Согласована дата', 'Определена цель',
             'Озвучена цена', 'Жалоба решена', 'Попрощался'
         ]].copy()
 
+        status_map = {
+            'done': '✅ Ок',
+            'processing': '⏳ Обработка',
+            'skipped': '⏭️ Пропущено',
+            'error': '❌ Ошибка',
+            'new': '🆕 Новый'
+        }
+        display_df['Статус'] = display_df['processing_status'].map(lambda x: status_map.get(x, x))
+
         display_df.rename(columns={
             'calldate': 'Дата/время',
             'call_summary': 'Краткое содержание'
         }, inplace=True)
+
+        # Удаляем оригинал и оставляем маппинг
+        display_df.drop(columns=['processing_status'], inplace=True)
 
         # Отображение таблицы
         selection = st.dataframe(
