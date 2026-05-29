@@ -29,11 +29,15 @@ def get_disk_file_counts(start_date, end_date):
     return counts
 
 # Фильтры
-col1, col2 = st.columns(2)
-with col1:
-    start_date = st.date_input("Дата начала", datetime.now() - timedelta(days=7))
-with col2:
-    end_date = st.date_input("Дата окончания", datetime.now())
+today = datetime.now().date()
+default_start = today - timedelta(days=7)
+date_range = st.date_input("Выберите диапазон дат", (default_start, today))
+
+if not (isinstance(date_range, tuple) and len(date_range) == 2):
+    st.info("Выберите диапазон дат (начало и конец).")
+    st.stop()
+
+start_date, end_date = date_range
 
 if start_date > end_date:
     st.error("Дата начала не может быть больше даты окончания")
@@ -63,11 +67,11 @@ else:
         total_queued = df_daily['queued'].sum()
 
         m1, m2, m3, m4, m5 = st.columns(5)
-        m1.metric("Всего на диске", total_calls)
-        m2.metric("Обработано", total_processed)
-        m3.metric("Пропущено", total_skipped)
-        m4.metric("В обработке", total_in_progress)
-        m5.metric("В очереди", total_queued)
+        m1.metric("Всего на диске", f"{total_calls:,}".replace(",", " "))
+        m2.metric("Обработано", f"{total_processed:,}".replace(",", " "))
+        m3.metric("Пропущено", f"{total_skipped:,}".replace(",", " "))
+        m4.metric("В обработке", f"{total_in_progress:,}".replace(",", " "))
+        m5.metric("В очереди", f"{total_queued:,}".replace(",", " "))
 
         st.divider()
 
@@ -91,6 +95,7 @@ else:
             labels={'value': 'Количество', 'date': 'Дата', 'variable': 'Статус'},
             barmode='stack'
         )
+        fig_daily.update_layout(separators=", ")
         st.plotly_chart(fig_daily, use_container_width=True)
 
         # Таблица данных
@@ -99,14 +104,14 @@ else:
             use_container_width=True,
             column_config={
                 "date": "Дата",
-                "total_disk": "Всего",
-                "skipped": "Пропущено",
-                "processed": "Обработано",
-                "in_progress": "В обработке",
-                "queued": "В очереди",
-                "error": "Ошибка",
-                "avg_duration": "Среднее время (сек)",
-                "total_duration": "Общее время (сек)"
+                "total_disk": st.column_config.NumberColumn("Всего", format="%d"),
+                "skipped": st.column_config.NumberColumn("Пропущено", format="%d"),
+                "processed": st.column_config.NumberColumn("Обработано", format="%d"),
+                "in_progress": st.column_config.NumberColumn("В обработке", format="%d"),
+                "queued": st.column_config.NumberColumn("В очереди", format="%d"),
+                "error": st.column_config.NumberColumn("Ошибка", format="%d"),
+                "avg_duration": st.column_config.NumberColumn("Среднее время (сек)", format="%.2f"),
+                "total_duration": st.column_config.NumberColumn("Общее время (сек)", format="%.2f")
             },
             hide_index=True
         )
@@ -127,6 +132,7 @@ else:
                 names='Название промпта',
                 title="Распределение использования промптов"
             )
+            fig_prompts.update_layout(separators=", ")
 
             pc1, pc2 = st.columns([1, 1])
             with pc1:
@@ -135,7 +141,10 @@ else:
                 st.dataframe(
                     df_prompts,
                     use_container_width=True,
-                    column_config={"name": "Название промпта", "count": "Использовано раз"},
+                    column_config={
+                        "name": "Название промпта",
+                        "count": st.column_config.NumberColumn("Использовано раз", format="%d")
+                    },
                     hide_index=True
                 )
         else:
@@ -153,7 +162,8 @@ else:
             df_speed['files_per_hour'] = df_speed['avg_total_duration'].apply(lambda x: 3600 / x if x > 0 else 0)
 
             avg_speed = df_speed['files_per_hour'].mean()
-            st.info(f"**Средняя скорость анализа:** {avg_speed:.2f} файлов в час")
+            formatted_speed = f"{avg_speed:,.2f}".replace(",", " ").replace(".", ",")
+            st.info(f"**Средняя скорость анализа:** {formatted_speed} файлов в час")
 
             fig_speed = px.line(
                 df_speed,
@@ -162,6 +172,7 @@ else:
                 title="Скорость анализа по дням (файлов в час)",
                 labels={'files_per_hour': 'Файлов в час', 'date': 'Дата'}
             )
+            fig_speed.update_layout(separators=", ")
             st.plotly_chart(fig_speed, use_container_width=True)
         else:
             st.write("Недостаточно данных для расчета скорости")
@@ -181,15 +192,21 @@ else:
             percentages = [v/total * 100 if total > 0 else 0 for v in values]
 
             fig_pie = go.Figure(data=[go.Pie(labels=labels, values=values, hole=.3)])
-            fig_pie.update_layout(title_text="Распределение времени по этапам")
+            fig_pie.update_layout(title_text="Распределение времени по этапам", separators=", ")
 
             c1, c2 = st.columns([1, 1])
             with c1:
                 st.plotly_chart(fig_pie, use_container_width=True)
             with c2:
+                def f_num(n):
+                    return f"{n:,.2f}".replace(",", " ").replace(".", ",")
+
+                def f_pct(n):
+                    return f"{n:,.1f}".replace(",", " ").replace(".", ",")
+
                 st.write("**Среднее время по этапам (сек):**")
-                st.write(f"- ASR: {values[0]:.2f} сек ({percentages[0]:.1f}%)")
-                st.write(f"- LLM: {values[1]:.2f} сек ({percentages[1]:.1f}%)")
-                st.write(f"**Итого в среднем на 1 файл:** {total:.2f} сек")
+                st.write(f"- ASR: {f_num(values[0])} сек ({f_pct(percentages[0])}%)")
+                st.write(f"- LLM: {f_num(values[1])} сек ({f_pct(percentages[1])}%)")
+                st.write(f"**Итого в среднем на 1 файл:** {f_num(total)} сек")
         else:
             st.write("Недостаточно данных для анализа этапов обработки")

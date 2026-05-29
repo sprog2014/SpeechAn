@@ -4,6 +4,7 @@ from sqlalchemy import create_engine
 import sys
 import os
 import plotly.express as px
+import plotly.graph_objects as go
 
 # Добавляем путь к src, чтобы найти config.py
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src'))
@@ -31,6 +32,7 @@ def get_summary_data(start_date, end_date):
             c.calldate,
             c.direction,
             c.billsec,
+            c.duration,
             c.src,
             c.answeredext,
             e.client_sentiment,
@@ -101,6 +103,7 @@ else:
             "consultation": "Консультация",
             "complaint": "Жалоба",
             "cancel_appointment": "Отмена записи",
+            "reschedule_appointment": "Перенос записи",
             "other": "Другое"
         }
         sentiment_map = {
@@ -125,17 +128,64 @@ else:
         return row
 
     processed_df = df.apply(process_row, axis=1).reset_index(drop=True)
+    processed_df['hour'] = processed_df['calldate'].dt.hour
 
-    st.markdown("### Визуализация")
+    # Инициализация состояния фильтров
+    if "filters" not in st.session_state:
+        st.session_state.filters = {"purpose": None, "sentiment": None, "hour": None}
+    if "show_table" not in st.session_state:
+        st.session_state.show_table = False
+    if "last_date_range" not in st.session_state:
+        st.session_state.last_date_range = date_range
+
+    # Сброс фильтров при смене дат
+    if st.session_state.last_date_range != date_range:
+        st.session_state.filters = {"purpose": None, "sentiment": None, "hour": None}
+        st.session_state.show_table = False
+        st.session_state.last_date_range = date_range
+
+    def get_filtered_df(exclude=None):
+        df_f = processed_df.copy()
+        if st.session_state.filters["purpose"] and exclude != "purpose":
+            df_f = df_f[df_f['Цель звонка'] == st.session_state.filters["purpose"]]
+        if st.session_state.filters["sentiment"] and exclude != "sentiment":
+            df_f = df_f[df_f['Настроение'] == st.session_state.filters["sentiment"]]
+        if st.session_state.filters["hour"] is not None and exclude != "hour":
+            df_f = df_f[df_f['hour'] == st.session_state.filters["hour"]]
+        return df_f
+
+    # Отображение активных фильтров
+    active_filters_count = len([v for v in st.session_state.filters.values() if v is not None])
+    if active_filters_count > 0:
+        cols_f = st.columns(active_filters_count + 1)
+        cur_col = 0
+        if st.session_state.filters["purpose"]:
+            cols_f[cur_col].info(f"Цель: {st.session_state.filters['purpose']}")
+            cur_col += 1
+        if st.session_state.filters["sentiment"]:
+            cols_f[cur_col].info(f"Настроение: {st.session_state.filters['sentiment']}")
+            cur_col += 1
+        if st.session_state.filters["hour"] is not None:
+            cols_f[cur_col].info(f"Час: {st.session_state.filters['hour']}:00")
+            cur_col += 1
+        if cols_f[cur_col].button("Сбросить фильтры"):
+            st.session_state.filters = {"purpose": None, "sentiment": None, "hour": None}
+            st.session_state.show_table = False
+            st.rerun()
+
     col1, col2 = st.columns(2)
 
-    # Подготовка данных для графиков
-    purpose_counts = processed_df['Цель звонка'].value_counts().reset_index()
+    # 1. График целей
+    df_p = get_filtered_df(exclude="purpose")
+    purpose_counts = df_p['Цель звонка'].value_counts().reset_index()
     purpose_counts.columns = ['Цель', 'Количество']
-    fig_purpose = px.bar(purpose_counts, x='Цель', y='Количество', color='Цель',
+    fig_purpose = px.bar(purpose_counts, x='Цель', y='Количество',
                          labels={'Количество': 'Количество звонков', 'Цель': 'Цель звонка'})
+    fig_purpose.update_layout(separators=", ")
 
-    sentiment_counts = processed_df['Настроение'].value_counts().reset_index()
+    # 2. График настроения
+    df_s = get_filtered_df(exclude="sentiment")
+    sentiment_counts = df_s['Настроение'].value_counts().reset_index()
     sentiment_counts.columns = ['Настроение', 'Количество']
     fig_sentiment = px.pie(sentiment_counts, values='Количество', names='Настроение',
                            color='Настроение',
@@ -145,73 +195,154 @@ else:
                                'Отрицательное': 'orange',
                                'Конфликт': 'red'
                            })
+    fig_sentiment.update_layout(separators=", ")
 
     with col1:
         st.subheader("Распределение целей звонков")
         purpose_event = st.plotly_chart(fig_purpose, use_container_width=True, on_select="rerun", key="purpose_chart")
+        if purpose_event and purpose_event.selection.get("points"):
+            sel = purpose_event.selection["points"][0].get("x")
+            if sel != st.session_state.filters["purpose"]:
+                st.session_state.filters["purpose"] = sel
+                st.session_state.show_table = True
+                st.rerun()
 
     with col2:
         st.subheader("Настроение клиентов")
         sentiment_event = st.plotly_chart(fig_sentiment, use_container_width=True, on_select="rerun", key="sentiment_chart")
+        if sentiment_event and sentiment_event.selection.get("points"):
+            sel = sentiment_event.selection["points"][0].get("label")
+            if sel != st.session_state.filters["sentiment"]:
+                st.session_state.filters["sentiment"] = sel
+                st.session_state.show_table = True
+                st.rerun()
 
-    # Фильтрация данных
-    filtered_df = processed_df.copy()
+    col3, col4 = st.columns(2)
 
-    if purpose_event and purpose_event.selection.get("points"):
-        selected_purpose = purpose_event.selection["points"][0].get("x")
-        if selected_purpose:
-            filtered_df = filtered_df[filtered_df['Цель звонка'] == selected_purpose]
-            st.info(f"Фильтр по цели: {selected_purpose}")
+    # Подготовка данных для почасовых графиков
+    df_h = get_filtered_df(exclude="hour")
+    num_days = (end_date - start_date).days + 1
+    if num_days <= 0: num_days = 1
 
-    if sentiment_event and sentiment_event.selection.get("points"):
-        selected_sentiment = sentiment_event.selection["points"][0].get("label")
-        if selected_sentiment:
-            filtered_df = filtered_df[filtered_df['Настроение'] == selected_sentiment]
-            st.info(f"Фильтр по настроению: {selected_sentiment}")
+    all_hours = pd.DataFrame({'hour': range(6, 23)})
 
-    st.markdown("---")
-    st.markdown("### Список звонков")
+    # 3. Распределение по часам (количество)
+    hourly_counts = df_h[(df_h['hour'] >= 6) & (df_h['hour'] <= 22)].groupby('hour').size().reset_index(name='count')
+    hourly_counts = all_hours.merge(hourly_counts, on='hour', how='left').fillna(0)
+    hourly_counts['avg'] = (hourly_counts['count'] / num_days).round(1)
 
-    # Выбор и переименование колонок для отображения
-    display_df = filtered_df[[
-        'calldate', 'Номер клиента', 'Имя оператора', 'Продолжительность',
-        'Цель звонка', 'Настроение', 'call_summary',
-        'Поздоровался', 'Представился', 'Согласована дата', 'Определена цель',
-        'Озвучена цена', 'Жалоба решена', 'Попрощался'
-    ]].copy()
+    # Заменяем точку на запятую в средних значениях для отображения на графике
+    hourly_counts['avg_str'] = hourly_counts['avg'].apply(lambda x: str(x).replace('.', ','))
 
-    display_df.rename(columns={
-        'calldate': 'Дата/время',
-        'call_summary': 'Краткое содержание'
-    }, inplace=True)
+    fig_h_count = px.bar(hourly_counts, x='hour', y='count',
+                         labels={'count': 'Кол-во звонков', 'hour': 'Час'},
+                         text=hourly_counts['avg_str'])
+    fig_h_count.update_traces(textposition='inside')
+    fig_h_count.update_layout(xaxis={'tickmode': 'linear', 'tick0': 6, 'dtick': 1}, separators=", ")
 
-    # Отображение таблицы
-    selection = st.dataframe(
-        display_df,
-        column_config={
-            "Дата/время": st.column_config.DatetimeColumn("Дата/время", format="DD.MM.YYYY HH:mm"),
-        },
-        hide_index=True,
-        on_select="rerun",
-        selection_mode="single-row",
-        key="calls_table"
+    # 4. Средняя продолжительность
+    hourly_dur = df_h[(df_h['hour'] >= 6) & (df_h['hour'] <= 22)].groupby('hour')[['duration', 'billsec']].mean().reset_index()
+    hourly_dur = all_hours.merge(hourly_dur, on='hour', how='left').fillna(0)
+
+    def format_mmss(sec):
+        if sec <= 0: return ""
+        m, s = divmod(int(sec), 60)
+        return f"{m:02d}:{s:02d}"
+
+    hourly_dur['duration_str'] = hourly_dur['duration'].apply(format_mmss)
+    hourly_dur['billsec_str'] = hourly_dur['billsec'].apply(format_mmss)
+
+    fig_h_dur = go.Figure()
+    fig_h_dur.add_trace(go.Bar(
+        x=hourly_dur['hour'], y=hourly_dur['duration'], name='Ожидание + Разговор',
+        marker_color='rgba(100, 149, 237, 0.6)',
+        text=hourly_dur['duration_str'], textposition='inside',
+        hovertemplate="Ожидание + Разговор: %{text}<extra></extra>"
+    ))
+    fig_h_dur.add_trace(go.Bar(
+        x=hourly_dur['hour'], y=hourly_dur['billsec'], name='Разговор',
+        marker_color='rgba(0, 0, 139, 0.8)',
+        text=hourly_dur['billsec_str'], textposition='inside',
+        hovertemplate="Разговор: %{text}<extra></extra>"
+    ))
+    fig_h_dur.update_layout(
+        barmode='overlay',
+        xaxis={'title': 'Час', 'tickmode': 'linear', 'tick0': 6, 'dtick': 1},
+        yaxis={'title': 'Среднее время (сек)'},
+        legend={'orientation': 'h', 'yanchor': 'bottom', 'y': 1.02, 'xanchor': 'right', 'x': 1},
+        separators=", "
     )
 
-    # Обработка выбора строки и вывод плеера
-    if selection and selection.selection.rows:
-        selected_index = selection.selection.rows[0]
-        # Используем iloc на filtered_df, так как display_df соответствует filtered_df
-        selected_linkedid = filtered_df.iloc[selected_index]['linkedid']
+    with col3:
+        st.subheader("Звонки по часам")
+        hour_event = st.plotly_chart(fig_h_count, use_container_width=True, on_select="rerun", key="hour_chart")
+        if hour_event and hour_event.selection.get("points"):
+            sel = int(hour_event.selection["points"][0].get("x"))
+            if sel != st.session_state.filters["hour"]:
+                st.session_state.filters["hour"] = sel
+                st.session_state.show_table = True
+                st.rerun()
 
+    with col4:
+        st.subheader("Средняя длительность")
+        hour_dur_event = st.plotly_chart(fig_h_dur, use_container_width=True, on_select="rerun", key="hour_dur_chart")
+        if hour_dur_event and hour_dur_event.selection.get("points"):
+            sel = int(hour_dur_event.selection["points"][0].get("x"))
+            if sel != st.session_state.filters["hour"]:
+                st.session_state.filters["hour"] = sel
+                st.session_state.show_table = True
+                st.rerun()
+
+    if st.button("Показать все звонки"):
+        st.session_state.filters = {"purpose": None, "sentiment": None, "hour": None}
+        st.session_state.show_table = True
+        st.rerun()
+
+    if st.session_state.show_table:
+        filtered_df = get_filtered_df()
         st.markdown("---")
-        st.subheader(f"Прослушивание записи: {selected_linkedid}")
+        st.markdown(f"### Список звонков ({len(filtered_df)})")
 
-        db_url = f"postgresql://{PG_CONFIG['user']}:{PG_CONFIG['password']}@{PG_CONFIG['host']}:{PG_CONFIG['port']}/{PG_CONFIG['dbname']}"
-        engine = create_engine(db_url)
-        with engine.connect() as conn:
-            res = conn.execute(text("SELECT file_path FROM calls WHERE linkedid = :lid"), {"lid": selected_linkedid}).fetchone()
-            if res and res[0] and os.path.exists(res[0]):
-                st.audio(res[0])
-            else:
-                st.error("Файл записи не найден.")
-        engine.dispose()
+        # Выбор и переименование колонок для отображения
+        display_df = filtered_df[[
+            'calldate', 'Номер клиента', 'Имя оператора', 'Продолжительность',
+            'Цель звонка', 'Настроение', 'call_summary',
+            'Поздоровался', 'Представился', 'Согласована дата', 'Определена цель',
+            'Озвучена цена', 'Жалоба решена', 'Попрощался'
+        ]].copy()
+
+        display_df.rename(columns={
+            'calldate': 'Дата/время',
+            'call_summary': 'Краткое содержание'
+        }, inplace=True)
+
+        # Отображение таблицы
+        selection = st.dataframe(
+            display_df,
+            column_config={
+                "Дата/время": st.column_config.DatetimeColumn("Дата/время", format="DD.MM.YYYY HH:mm"),
+            },
+            hide_index=True,
+            on_select="rerun",
+            selection_mode="single-row",
+            key="calls_table"
+        )
+
+        # Обработка выбора строки и вывод плеера
+        if selection and selection.selection.rows:
+            selected_index = selection.selection.rows[0]
+            # Используем iloc на filtered_df
+            selected_linkedid = filtered_df.iloc[selected_index]['linkedid']
+
+            st.markdown("---")
+            st.subheader(f"Прослушивание записи: {selected_linkedid}")
+
+            db_url = f"postgresql://{PG_CONFIG['user']}:{PG_CONFIG['password']}@{PG_CONFIG['host']}:{PG_CONFIG['port']}/{PG_CONFIG['dbname']}"
+            engine = create_engine(db_url)
+            with engine.connect() as conn:
+                res = conn.execute(text("SELECT file_path FROM calls WHERE linkedid = :lid"), {"lid": selected_linkedid}).fetchone()
+                if res and res[0] and os.path.exists(res[0]):
+                    st.audio(res[0])
+                else:
+                    st.error("Файл записи не найден.")
+            engine.dispose()

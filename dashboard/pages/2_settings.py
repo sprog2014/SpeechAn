@@ -139,8 +139,9 @@ else:
 # --- Раздел 3: Ручной запуск ---
 st.header("Ручной запуск")
 with st.form("manual_run_form"):
-    date_start = st.date_input("Дата начала", datetime.now() - timedelta(days=1))
-    date_end = st.date_input("Дата конца", datetime.now())
+    today = datetime.now().date()
+    default_start = today - timedelta(days=1)
+    date_range = st.date_input("Выберите диапазон дат", (default_start, today))
 
     prompt_options = {p['id']: p['name'] for p in prompts} if prompts else {}
     selected_manual_prompt = st.selectbox("Промпт", options=list(prompt_options.keys()), format_func=lambda x: prompt_options[x])
@@ -148,7 +149,10 @@ with st.form("manual_run_form"):
     submit_manual = st.form_submit_button("Запустить повторную обработку")
 
     if submit_manual:
-        if selected_manual_prompt:
+        if not (isinstance(date_range, tuple) and len(date_range) == 2):
+            st.error("Выберите диапазон дат (начало и конец).")
+        elif selected_manual_prompt:
+            date_start, date_end = date_range
             script_path = os.path.join(SRC_DIR, "manual_run.py")
             cmd = [
                 "python3", script_path,
