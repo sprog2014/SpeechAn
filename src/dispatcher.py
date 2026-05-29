@@ -8,12 +8,10 @@ from datetime import datetime, timedelta
 from config import RECORDS_ROOT, NUM_WORKERS
 from db_utils import get_pg_connection, get_system_running_status
 from worker import process_file
+from logging_utils import setup_logging
 
-# Настройка логирования диспетчера
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s %(levelname)s [%(name)s] %(message)s'
-)
+# Инициализация логирования
+setup_logging()
 logger = logging.getLogger("dispatcher")
 
 # Множество для отслеживания файлов, которые сейчас в обработке
@@ -108,46 +106,59 @@ def main():
     except RuntimeError:
         pass
 
-    with concurrent.futures.ProcessPoolExecutor(max_workers=NUM_WORKERS) as executor:
-        while True:
-            # Проверка статуса запуска системы
-            if not get_system_running_status():
-                if processing_now:
-                    logger.info(f"System is STOPPING. Waiting for {len(processing_now)} active tasks...")
-                else:
-                    # Уменьшаем время сна для большей отзывчивости на кнопку Запуск
-                    logger.info("System is in WAITING mode (is_running=false).")
-                time.sleep(5)
-                continue
-
-            current_active = len(processing_now)
-            if current_active < NUM_WORKERS:
-                files = scan_files()
-                if files:
-                    to_submit = NUM_WORKERS - current_active
-                    logger.info(f"Found {len(files)} new files. Submitting up to {to_submit} tasks. (Active: {current_active})")
-                    for f_path in files:
-                        if len(processing_now) >= NUM_WORKERS:
-                            break
-
-                        linkedid = os.path.splitext(os.path.basename(f_path))[0]
-                        processing_now.add(linkedid)
-
-                        logger.info(f"[{linkedid}] Submitting task for file: {f_path}")
-                        # Важно: process_file должна быть импортирована корректно
-                        future = executor.submit(process_file, f_path)
-                        future.linkedid = linkedid
-                        future.add_done_callback(task_done_callback)
-                else:
-                    if not processing_now:
-                        logger.info("No new files to process and no active tasks. Sleeping 5s.")
+    while True:
+        try:
+            logger.info(f"Initializing ProcessPoolExecutor with {NUM_WORKERS} workers...")
+            with concurrent.futures.ProcessPoolExecutor(
+                max_workers=NUM_WORKERS,
+                max_tasks_per_child=5 # Перезапускаем процессы для очистки памяти
+            ) as executor:
+                while True:
+                    # Проверка статуса запуска системы
+                    if not get_system_running_status():
+                        if processing_now:
+                            logger.info(f"System is STOPPING. Waiting for {len(processing_now)} active tasks...")
+                        else:
+                            # Уменьшаем время сна для большей отзывчивости на кнопку Запуск
+                            logger.info("System is in WAITING mode (is_running=false).")
                         time.sleep(5)
+                        continue
+
+                    current_active = len(processing_now)
+                    if current_active < NUM_WORKERS:
+                        files = scan_files()
+                        if files:
+                            to_submit = NUM_WORKERS - current_active
+                            logger.info(f"Found {len(files)} new files. Submitting up to {to_submit} tasks. (Active: {current_active})")
+                            for f_path in files:
+                                if len(processing_now) >= NUM_WORKERS:
+                                    break
+
+                                linkedid = os.path.splitext(os.path.basename(f_path))[0]
+                                processing_now.add(linkedid)
+
+                                logger.info(f"[{linkedid}] Submitting task for file: {f_path}")
+                                # Важно: process_file должна быть импортирована корректно
+                                future = executor.submit(process_file, f_path)
+                                future.linkedid = linkedid
+                                future.add_done_callback(task_done_callback)
+                        else:
+                            if not processing_now:
+                                logger.info("No new files to process and no active tasks. Sleeping 5s.")
+                                time.sleep(5)
+                            else:
+                                logger.debug("No new files found. Waiting for active tasks...")
+                                time.sleep(2)
                     else:
-                        logger.debug("No new files found. Waiting for active tasks...")
-                        time.sleep(2)
-            else:
-                logger.debug(f"Worker pool is full ({current_active} active). Waiting...")
-                time.sleep(5)
+                        logger.debug(f"Worker pool is full ({current_active} active). Waiting...")
+                        time.sleep(5)
+        except concurrent.futures.process.BrokenProcessPool:
+            logger.error("Process pool broken (likely OOM or crash). Recreating executor in 10s...")
+            processing_now.clear()
+            time.sleep(10)
+        except Exception as e:
+            logger.exception(f"Unexpected error in dispatcher loop: {e}")
+            time.sleep(10)
 
 if __name__ == "__main__":
     main()
