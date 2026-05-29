@@ -12,7 +12,7 @@ import json
 try:
     pg_pool = psycopg2.pool.ThreadedConnectionPool(
         minconn=1,
-        maxconn=NUM_WORKERS + 5,
+        maxconn=NUM_WORKERS * 2 + 10,
         **PG_CONFIG
     )
     logging.info("PostgreSQL connection pool created")
@@ -24,7 +24,7 @@ except Exception as e:
 try:
     mysql_pool = mysql.connector.pooling.MySQLConnectionPool(
         pool_name="mypool",
-        pool_size=min(32, NUM_WORKERS + 5),
+        pool_size=min(32, NUM_WORKERS * 2 + 5),
         **MYSQL_CONFIG
     )
     logging.info("MySQL connection pool created")
