@@ -91,7 +91,7 @@ def get_llm():
                         device="CPU",
                         ov_config={"PERFORMANCE_HINT": "LATENCY"}
                     )
-                    _llm_tokenizer = AutoTokenizer.from_pretrained(model_path)
+                    _llm_tokenizer = AutoTokenizer.from_pretrained(model_path, fix_mistral_regex=True)
                     logger.info("Qwen2.5 OpenVINO model loaded successfully")
                 except Exception as e:
                     logger.error(f"Failed to load Qwen2.5 OpenVINO model from {model_path}: {e}")
