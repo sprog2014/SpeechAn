@@ -7,11 +7,9 @@ from config import RECORDS_ROOT, NUM_WORKERS
 from worker import process_file
 from models import get_asr_model, get_llm
 from db_utils import get_system_running_status
+from logging_utils import setup_logging
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s %(levelname)s [%(name)s] %(message)s'
-)
+setup_logging()
 logger = logging.getLogger("manual_run")
 
 def get_date_range(start_str, end_str=None):

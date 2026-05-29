@@ -12,7 +12,10 @@ from db_utils import (
 )
 from asr import transcribe_with_vad
 from llm_analysis import analyze_transcript
+from logging_utils import setup_logging
 
+# В воркерах, запускаемых через spawn, нужно инициализировать логирование заново
+setup_logging()
 logger = logging.getLogger(__name__)
 
 def process_file(file_path: str, prompt_id: int = None, force: bool = False):
@@ -170,7 +173,7 @@ def process_file(file_path: str, prompt_id: int = None, force: bool = False):
 if __name__ == "__main__":
     import sys
     # Настройка логирования для прямого запуска воркера
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s [%(name)s] %(message)s')
+    setup_logging()
     if len(sys.argv) != 2:
         print("Usage: python worker.py <path_to_mp3>")
         sys.exit(1)

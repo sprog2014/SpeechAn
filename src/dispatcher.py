@@ -8,12 +8,10 @@ from datetime import datetime, timedelta
 from config import RECORDS_ROOT, NUM_WORKERS
 from db_utils import get_pg_connection, get_system_running_status
 from worker import process_file
+from logging_utils import setup_logging
 
-# Настройка логирования диспетчера
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s %(levelname)s [%(name)s] %(message)s'
-)
+# Инициализация логирования
+setup_logging()
 logger = logging.getLogger("dispatcher")
 
 # Множество для отслеживания файлов, которые сейчас в обработке
