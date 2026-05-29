@@ -90,6 +90,14 @@ else:
         row['Имя оператора'] = phone_names.get(op_num, op_num)
         row['Номер клиента'] = cl_num
 
+        # 2. Определение типа звонка
+        if op_num in phone_names and cl_num in phone_names:
+            row['Тип звонка'] = 'Внутренний'
+        elif row['direction'] == 'incoming':
+            row['Тип звонка'] = 'Входящий'
+        else:
+            row['Тип звонка'] = 'Исходящий'
+
         # 3. Продолжительность мм:сс
         if pd.notnull(row['billsec']):
             m, s = divmod(int(row['billsec']), 60)
@@ -231,19 +239,47 @@ else:
     all_hours = pd.DataFrame({'hour': range(6, 23)})
 
     # 3. Распределение по часам (количество)
-    hourly_counts = df_h[(df_h['hour'] >= 6) & (df_h['hour'] <= 22)].groupby('hour').size().reset_index(name='count')
-    hourly_counts = all_hours.merge(hourly_counts, on='hour', how='left').fillna(0)
-    hourly_counts['avg'] = (hourly_counts['count'] / num_days).round(1)
+    hourly_data = df_h[(df_h['hour'] >= 6) & (df_h['hour'] <= 22)]
 
-    # Заменяем точку на запятую в средних значениях для отображения на графике
-    hourly_counts['avg_str'] = hourly_counts['avg'].apply(lambda x: str(x).replace('.', ','))
+    # Считаем общее кол-во по часам для отображения среднего значения на столбике
+    hourly_totals = hourly_data.groupby('hour').size().reset_index(name='total_count')
+    hourly_totals['avg'] = (hourly_totals['total_count'] / num_days).round(1)
+    hourly_totals['avg_str'] = hourly_totals['avg'].apply(lambda x: str(x).replace('.', ','))
 
-    fig_h_count = px.bar(hourly_counts, x='hour', y='count',
-                         labels={'count': 'Кол-во звонков', 'hour': 'Час'},
-                         text=hourly_counts['avg_str'],
-                         custom_data=['hour'])
+    # Группируем по часам и типам звонков
+    hourly_counts = hourly_data.groupby(['hour', 'Тип звонка']).size().reset_index(name='count')
+
+    # Добавляем все часы и типы, чтобы графики не "прыгали"
+    call_types = ['Входящий', 'Исходящий', 'Внутренний']
+    full_index = pd.MultiIndex.from_product([range(6, 23), call_types], names=['hour', 'Тип звонка'])
+    hourly_counts = hourly_counts.set_index(['hour', 'Тип звонка']).reindex(full_index, fill_value=0).reset_index()
+
+    # Объединяем с общими данными для текста
+    hourly_counts = hourly_counts.merge(hourly_totals[['hour', 'avg_str']], on='hour', how='left')
+
+    # Мы хотим показывать среднее значение только один раз для каждого часа (на верхнем сегменте)
+    # Определяем, какой тип звонка является "верхним" в стаке для каждого часа
+    hourly_counts['is_top'] = False
+    for h in range(6, 23):
+        mask = (hourly_counts['hour'] == h) & (hourly_counts['count'] > 0)
+        if mask.any():
+            # Находим последний (верхний) тип с ненулевым значением
+            last_idx = hourly_counts[mask].index[-1]
+            hourly_counts.at[last_idx, 'is_top'] = True
+
+    hourly_counts['display_text'] = hourly_counts.apply(lambda r: r['avg_str'] if r['is_top'] else "", axis=1)
+
+    fig_h_count = px.bar(hourly_counts, x='hour', y='count', color='Тип звонка',
+                         labels={'count': 'Кол-во звонков', 'hour': 'Час', 'Тип звонка': 'Тип'},
+                         text='display_text',
+                         custom_data=['hour', 'Тип звонка'],
+                         color_discrete_map={
+                             'Входящий': 'green',
+                             'Исходящий': 'blue',
+                             'Внутренний': 'orange'
+                         })
     fig_h_count.update_traces(textposition='inside')
-    fig_h_count.update_layout(xaxis={'tickmode': 'linear', 'tick0': 6, 'dtick': 1}, separators=", ")
+    fig_h_count.update_layout(xaxis={'tickmode': 'linear', 'tick0': 6, 'dtick': 1}, separators=", ", barmode='stack')
 
     # 4. Средняя продолжительность
     hourly_dur = df_h[(df_h['hour'] >= 6) & (df_h['hour'] <= 22)].groupby('hour')[['duration', 'billsec']].mean().reset_index()
@@ -318,7 +354,7 @@ else:
 
         # Выбор и переименование колонок для отображения
         display_df = filtered_df[[
-            'calldate', 'Номер клиента', 'Имя оператора', 'Продолжительность',
+            'calldate', 'Тип звонка', 'Номер клиента', 'Имя оператора', 'Продолжительность',
             'Цель звонка', 'Настроение', 'call_summary',
             'Поздоровался', 'Представился', 'Согласована дата', 'Определена цель',
             'Озвучена цена', 'Жалоба решена', 'Попрощался'
