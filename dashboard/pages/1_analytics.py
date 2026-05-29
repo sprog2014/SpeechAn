@@ -9,6 +9,7 @@ import plotly.graph_objects as go
 # Добавляем путь к src, чтобы найти config.py
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src'))
 from config import PG_CONFIG
+from db_utils import get_all_prompts, get_default_prompt
 
 if not st.session_state.get("password_correct", False):
     st.error("Пожалуйста, авторизуйтесь на главной странице.")
@@ -20,7 +21,7 @@ from sqlalchemy import text
 from datetime import datetime, timedelta
 
 @st.cache_data(ttl=60)
-def get_summary_data(start_date, end_date):
+def get_summary_data(start_date, end_date, prompt_id):
     # Формируем SQLAlchemy URL
     db_url = f"postgresql://{PG_CONFIG['user']}:{PG_CONFIG['password']}@{PG_CONFIG['host']}:{PG_CONFIG['port']}/{PG_CONFIG['dbname']}"
     engine = create_engine(db_url)
@@ -41,12 +42,16 @@ def get_summary_data(start_date, end_date):
             e.checklist_json,
             e.politeness_score
         FROM calls c
-        LEFT JOIN evaluations e ON c.linkedid = e.linkedid
+        LEFT JOIN evaluations e ON c.linkedid = e.linkedid AND e.prompt_id = :pid
         WHERE c.processing_status = 'done'
           AND c.calldate >= :start
           AND c.calldate < :end
         ORDER BY c.calldate DESC
-    """), conn, params={"start": start_date, "end": end_date + timedelta(days=1)})
+    """), conn, params={
+        "start": start_date,
+        "end": end_date + timedelta(days=1),
+        "pid": prompt_id
+    })
     engine.dispose()
     return df
 
@@ -59,18 +64,38 @@ def get_phone_names():
     engine.dispose()
     return dict(zip(df_phones['number'], df_phones['name']))
 
-# Выбор диапазона дат
-today = datetime.now().date()
-default_start = today - timedelta(days=7)
-date_range = st.date_input("Выберите диапазон дат", (default_start, today))
+# Фильтры в верхней панели
+col_d, col_p = st.columns([1, 1])
 
-if isinstance(date_range, tuple) and len(date_range) == 2:
-    start_date, end_date = date_range
-else:
+with col_d:
+    today = datetime.now().date()
+    default_start = today - timedelta(days=7)
+    date_range = st.date_input("Диапазон дат", (default_start, today))
+
+if not (isinstance(date_range, tuple) and len(date_range) == 2):
     st.info("Выберите диапазон дат (начало и конец).")
     st.stop()
 
-df = get_summary_data(start_date, end_date)
+start_date, end_date = date_range
+
+with col_p:
+    all_prompts = get_all_prompts()
+    default_p = get_default_prompt()
+    default_p_id = default_p['id'] if default_p else (all_prompts[0]['id'] if all_prompts else None)
+
+    prompt_options = {p['id']: p['name'] for p in all_prompts}
+    selected_prompt_id = st.selectbox(
+        "Аналитический промпт",
+        options=list(prompt_options.keys()),
+        format_func=lambda x: prompt_options[x],
+        index=list(prompt_options.keys()).index(default_p_id) if default_p_id in prompt_options else 0
+    )
+
+if not selected_prompt_id:
+    st.warning("Промпты не найдены. Создайте промпт в настройках.")
+    st.stop()
+
+df = get_summary_data(start_date, end_date, selected_prompt_id)
 
 if df.empty:
     st.warning("Нет данных для отображения.")
@@ -255,7 +280,7 @@ else:
     fig_politeness = px.line(daily_politeness, x='date', y='politeness_score',
                              labels={'politeness_score': 'Вежливость', 'date': 'Дата'},
                              markers=True,
-                             range_y=[0, 105]) # Оценка обычно до 100
+                             range_y=[0, 10]) # Оценка от 1 до 10
     fig_politeness.update_layout(separators=", ")
 
     with col_poly:
@@ -427,4 +452,23 @@ else:
                     st.audio(res[0])
                 else:
                     st.error("Файл записи не найден.")
+
+            # Добавляем расшифровку
+            st.markdown("#### Расшифровка звонка")
+            transcripts = pd.read_sql(text("""
+                SELECT channel, start_time, text
+                FROM transcripts
+                WHERE linkedid = :lid
+                ORDER BY start_time ASC
+            """), conn, params={"lid": selected_linkedid})
+
+            if not transcripts.empty:
+                for _, row in transcripts.iterrows():
+                    m, s = divmod(int(row['start_time']), 60)
+                    time_str = f"[{m:02d}:{s:02d}]"
+                    label = "👤 **Оператор**" if row['channel'] == 'operator' else "👥 **Клиент**"
+                    st.markdown(f"{time_str} {label}: {row['text']}")
+            else:
+                st.info("Расшифровка для этого звонка отсутствует.")
+
             engine.dispose()
