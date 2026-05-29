@@ -10,9 +10,12 @@ import json
 
 # Инициализация пула соединений PostgreSQL
 try:
+    # Используем SimpleConnectionPool для процессов воркеров,
+    # так как каждый воркер - это отдельный процесс и не требует потокобезопасного пула внутри себя.
+    # Но ThreadedConnectionPool тоже подходит.
     pg_pool = psycopg2.pool.ThreadedConnectionPool(
         minconn=1,
-        maxconn=NUM_WORKERS * 2 + 10,
+        maxconn=5, # Ограничиваем количество соединений на один процесс
         **PG_CONFIG
     )
     logging.info("PostgreSQL connection pool created")
@@ -24,7 +27,7 @@ except Exception as e:
 try:
     mysql_pool = mysql.connector.pooling.MySQLConnectionPool(
         pool_name="mypool",
-        pool_size=min(32, NUM_WORKERS * 2 + 5),
+        pool_size=5, # Ограничиваем количество соединений на один процесс
         **MYSQL_CONFIG
     )
     logging.info("MySQL connection pool created")
