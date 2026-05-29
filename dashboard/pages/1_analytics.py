@@ -92,12 +92,14 @@ else:
         row['Номер клиента'] = cl_num
 
         # 2. Определение типа звонка
-        if op_num in phone_names and cl_num in phone_names:
-            row['Тип звонка'] = 'Внутренний'
-        elif row['direction'] == 'incoming':
-            row['Тип звонка'] = 'Входящий'
-        else:
-            row['Тип звонка'] = 'Исходящий'
+        dir_map = {
+            'incoming': 'Входящий',
+            'inbound': 'Входящий',
+            'outgoing': 'Исходящий',
+            'outbound': 'Исходящий',
+            'internal': 'Внутренний'
+        }
+        row['Тип звонка'] = dir_map.get(row['direction'], row['direction'])
 
         # 3. Продолжительность мм:сс
         if pd.notnull(row['billsec']):
@@ -141,7 +143,7 @@ else:
 
     # Инициализация состояния фильтров
     if "filters" not in st.session_state:
-        st.session_state.filters = {"purpose": None, "sentiment": None, "hour": None}
+        st.session_state.filters = {"purpose": None, "sentiment": None, "hour": None, "type": None, "date": None}
     if "show_table" not in st.session_state:
         st.session_state.show_table = False
     if "last_date_range" not in st.session_state:
@@ -149,7 +151,7 @@ else:
 
     # Сброс фильтров при смене дат
     if st.session_state.last_date_range != date_range:
-        st.session_state.filters = {"purpose": None, "sentiment": None, "hour": None}
+        st.session_state.filters = {"purpose": None, "sentiment": None, "hour": None, "type": None, "date": None}
         st.session_state.show_table = False
         st.session_state.last_date_range = date_range
 
@@ -161,24 +163,37 @@ else:
             df_f = df_f[df_f['Настроение'] == st.session_state.filters["sentiment"]]
         if st.session_state.filters["hour"] is not None and exclude != "hour":
             df_f = df_f[df_f['hour'] == st.session_state.filters["hour"]]
+        if st.session_state.filters["type"] and exclude != "type":
+            df_f = df_f[df_f['Тип звонка'] == st.session_state.filters["type"]]
+        if st.session_state.filters["date"] and exclude != "date":
+            df_f = df_f[df_f['calldate'].dt.date == st.session_state.filters["date"]]
         return df_f
 
     # Отображение активных фильтров
     active_filters_count = len([v for v in st.session_state.filters.values() if v is not None])
     if active_filters_count > 0:
-        cols_f = st.columns(active_filters_count + 1)
+        # Ограничиваем количество колонок, чтобы кнопки не были слишком узкими
+        num_cols = min(active_filters_count + 1, 6)
+        cols_f = st.columns(num_cols)
         cur_col = 0
         if st.session_state.filters["purpose"]:
-            cols_f[cur_col].info(f"Цель: {st.session_state.filters['purpose']}")
+            cols_f[cur_col % num_cols].info(f"Цель: {st.session_state.filters['purpose']}")
             cur_col += 1
         if st.session_state.filters["sentiment"]:
-            cols_f[cur_col].info(f"Настроение: {st.session_state.filters['sentiment']}")
+            cols_f[cur_col % num_cols].info(f"Настроение: {st.session_state.filters['sentiment']}")
             cur_col += 1
         if st.session_state.filters["hour"] is not None:
-            cols_f[cur_col].info(f"Час: {st.session_state.filters['hour']}:00")
+            cols_f[cur_col % num_cols].info(f"Час: {st.session_state.filters['hour']}:00")
             cur_col += 1
-        if cols_f[cur_col].button("Сбросить фильтры"):
-            st.session_state.filters = {"purpose": None, "sentiment": None, "hour": None}
+        if st.session_state.filters["type"]:
+            cols_f[cur_col % num_cols].info(f"Тип: {st.session_state.filters['type']}")
+            cur_col += 1
+        if st.session_state.filters["date"]:
+            cols_f[cur_col % num_cols].info(f"Дата: {st.session_state.filters['date'].strftime('%d.%m')}")
+            cur_col += 1
+
+        if cols_f[cur_col % num_cols].button("Сбросить"):
+            st.session_state.filters = {"purpose": None, "sentiment": None, "hour": None, "type": None, "date": None}
             st.session_state.show_table = False
             st.rerun()
 
@@ -231,13 +246,16 @@ else:
                 st.rerun()
 
     # Линейный график вежливости
-    df_poly = get_filtered_df()
+    df_poly = get_filtered_df(exclude="date")
     df_poly['date'] = df_poly['calldate'].dt.date
+    # Группируем и берем среднее, игнорируя NaN
     daily_politeness = df_poly.groupby('date')['politeness_score'].mean().reset_index()
+    daily_politeness['politeness_score'] = daily_politeness['politeness_score'].round(2)
 
     fig_politeness = px.line(daily_politeness, x='date', y='politeness_score',
                              labels={'politeness_score': 'Вежливость', 'date': 'Дата'},
-                             markers=True)
+                             markers=True,
+                             range_y=[0, 105]) # Оценка обычно до 100
     fig_politeness.update_layout(separators=", ")
 
     with col_poly:
@@ -269,31 +287,23 @@ else:
     full_index = pd.MultiIndex.from_product([range(6, 23), call_types], names=['hour', 'Тип звонка'])
     hourly_counts = hourly_counts.set_index(['hour', 'Тип звонка']).reindex(full_index, fill_value=0).reset_index()
 
-    # Объединяем с общими данными для текста
-    hourly_counts = hourly_counts.merge(hourly_totals[['hour', 'avg_str']], on='hour', how='left')
-
-    # Мы хотим показывать среднее значение только один раз для каждого часа (на верхнем сегменте)
-    # Определяем, какой тип звонка является "верхним" в стаке для каждого часа
-    hourly_counts['is_top'] = False
-    for h in range(6, 23):
-        mask = (hourly_counts['hour'] == h) & (hourly_counts['count'] > 0)
-        if mask.any():
-            # Находим последний (верхний) тип с ненулевым значением
-            last_idx = hourly_counts[mask].index[-1]
-            hourly_counts.at[last_idx, 'is_top'] = True
-
-    hourly_counts['display_text'] = hourly_counts.apply(lambda r: r['avg_str'] if r['is_top'] else "", axis=1)
-
     fig_h_count = px.bar(hourly_counts, x='hour', y='count', color='Тип звонка',
                          labels={'count': 'Кол-во звонков', 'hour': 'Час', 'Тип звонка': 'Тип'},
-                         text='display_text',
                          custom_data=['hour', 'Тип звонка'],
                          color_discrete_map={
                              'Входящий': 'green',
                              'Исходящий': 'blue',
                              'Внутренний': 'orange'
                          })
-    fig_h_count.update_traces(textposition='inside')
+
+    # Добавляем среднее значение посередине всего столбика
+    for _, row_t in hourly_totals.iterrows():
+        if row_t['total_count'] > 0:
+            fig_h_count.add_annotation(
+                x=row_t['hour'], y=row_t['total_count']/2, text=row_t['avg_str'],
+                showarrow=False, font=dict(color="white", size=12)
+            )
+
     fig_h_count.update_layout(xaxis={'tickmode': 'linear', 'tick0': 6, 'dtick': 1}, separators=", ", barmode='stack')
 
     # 4. Средняя продолжительность
@@ -336,13 +346,21 @@ else:
         hour_event = st.plotly_chart(fig_h_count, use_container_width=True, on_select="rerun", key="hour_chart")
         if hour_event and hour_event.selection.get("points"):
             point = hour_event.selection["points"][0]
-            sel = point.get("customdata", [None])[0] or point.get("x")
-            if sel is not None:
-                sel = int(sel)
-                if sel != st.session_state.filters["hour"]:
-                    st.session_state.filters["hour"] = sel
-                    st.session_state.show_table = True
-                    st.rerun()
+            h_sel = point.get("customdata", [None, None])[0] or point.get("x")
+            t_sel = point.get("customdata", [None, None])[1]
+            changed = False
+            if h_sel is not None:
+                h_sel = int(h_sel)
+                if h_sel != st.session_state.filters["hour"]:
+                    st.session_state.filters["hour"] = h_sel
+                    changed = True
+            if t_sel is not None:
+                if t_sel != st.session_state.filters["type"]:
+                    st.session_state.filters["type"] = t_sel
+                    changed = True
+            if changed:
+                st.session_state.show_table = True
+                st.rerun()
 
     with col4:
         st.subheader("Средняя длительность")
@@ -358,7 +376,7 @@ else:
                     st.rerun()
 
     if st.button("Показать все звонки"):
-        st.session_state.filters = {"purpose": None, "sentiment": None, "hour": None}
+        st.session_state.filters = {"purpose": None, "sentiment": None, "hour": None, "type": None, "date": None}
         st.session_state.show_table = True
         st.rerun()
 
