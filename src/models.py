@@ -79,14 +79,12 @@ def get_llm():
     global _llm_model, _llm_tokenizer
     with _llm_lock:
         if _llm_model is None:
-            model_id = "Qwen/Qwen2.5-7B-Instruct"
             model_path = os.getenv("LLM_MODEL_PATH", "models/qwen2.5-7b-instruct-ov")
 
             logger.info(f"Initializing Qwen2.5 OpenVINO model from {model_path}...")
 
-            try:
-                # Пытаемся загрузить локально
-                if os.path.exists(model_path) and os.path.isdir(model_path):
+            if os.path.exists(model_path) and os.path.isdir(model_path):
+                try:
                     logger.info("Loading model from local path...")
                     _llm_model = OVModelForCausalLM.from_pretrained(
                         model_path,
@@ -94,25 +92,14 @@ def get_llm():
                         ov_config={"PERFORMANCE_HINT": "LATENCY"}
                     )
                     _llm_tokenizer = AutoTokenizer.from_pretrained(model_path)
-                else:
-                    logger.info(f"Model not found at {model_path}. Exporting from Hugging Face {model_id}...")
-                    # Экспортируем и сохраняем
-                    _llm_model = OVModelForCausalLM.from_pretrained(
-                        model_id,
-                        export=True,
-                        quantization_config={"bits": 8},
-                        device="CPU"
-                    )
-                    _llm_tokenizer = AutoTokenizer.from_pretrained(model_id)
-
-                    logger.info(f"Saving exported model to {model_path}...")
-                    _llm_model.save_pretrained(model_path)
-                    _llm_tokenizer.save_pretrained(model_path)
-
-                logger.info("Qwen2.5 OpenVINO model loaded successfully")
-            except Exception as e:
-                logger.error(f"Failed to load Qwen2.5 OpenVINO model: {e}")
-                raise
+                    logger.info("Qwen2.5 OpenVINO model loaded successfully")
+                except Exception as e:
+                    logger.error(f"Failed to load Qwen2.5 OpenVINO model from {model_path}: {e}")
+                    raise
+            else:
+                error_msg = f"Model directory not found at {model_path}. Please run setup script or convert model manually."
+                logger.error(error_msg)
+                raise FileNotFoundError(error_msg)
 
     return OpenVINOLLM(_llm_model, _llm_tokenizer)
 
