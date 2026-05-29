@@ -438,7 +438,6 @@ else:
         # Обработка выбора строки и вывод плеера
         if selection and selection.selection.rows:
             selected_index = selection.selection.rows[0]
-            # Используем iloc на filtered_df
             selected_linkedid = filtered_df.iloc[selected_index]['linkedid']
 
             st.markdown("---")
@@ -447,28 +446,30 @@ else:
             db_url = f"postgresql://{PG_CONFIG['user']}:{PG_CONFIG['password']}@{PG_CONFIG['host']}:{PG_CONFIG['port']}/{PG_CONFIG['dbname']}"
             engine = create_engine(db_url)
             with engine.connect() as conn:
+                # 1. Получаем путь к файлу
                 res = conn.execute(text("SELECT file_path FROM calls WHERE linkedid = :lid"), {"lid": selected_linkedid}).fetchone()
                 if res and res[0] and os.path.exists(res[0]):
                     st.audio(res[0])
                 else:
                     st.error("Файл записи не найден.")
 
-            # Добавляем расшифровку
-            st.markdown("#### Расшифровка звонка")
-            transcripts = pd.read_sql(text("""
-                SELECT channel, start_time, text
-                FROM transcripts
-                WHERE linkedid = :lid
-                ORDER BY start_time ASC
-            """), conn, params={"lid": selected_linkedid})
+                # 2. Добавляем расшифровку
+                st.markdown("#### Расшифровка звонка")
+                transcript_res = conn.execute(text("""
+                    SELECT channel, start_time, text
+                    FROM transcripts
+                    WHERE linkedid = :lid
+                    ORDER BY start_time ASC
+                """), {"lid": selected_linkedid})
 
-            if not transcripts.empty:
-                for _, row in transcripts.iterrows():
-                    m, s = divmod(int(row['start_time']), 60)
-                    time_str = f"[{m:02d}:{s:02d}]"
-                    label = "👤 **Оператор**" if row['channel'] == 'operator' else "👥 **Клиент**"
-                    st.markdown(f"{time_str} {label}: {row['text']}")
-            else:
-                st.info("Расшифровка для этого звонка отсутствует.")
+                rows = transcript_res.fetchall()
+                if rows:
+                    for row in rows:
+                        m, s = divmod(int(row.start_time), 60)
+                        time_str = f"[{m:02d}:{s:02d}]"
+                        label = "👤 **Оператор**" if row.channel == 'operator' else "👥 **Клиент**"
+                        st.markdown(f"{time_str} {label}: {row.text}")
+                else:
+                    st.info("Расшифровка для этого звонка отсутствует.")
 
             engine.dispose()
