@@ -180,7 +180,8 @@ else:
     purpose_counts = df_p['Цель звонка'].value_counts().reset_index()
     purpose_counts.columns = ['Цель', 'Количество']
     fig_purpose = px.bar(purpose_counts, x='Цель', y='Количество',
-                         labels={'Количество': 'Количество звонков', 'Цель': 'Цель звонка'})
+                         labels={'Количество': 'Количество звонков', 'Цель': 'Цель звонка'},
+                         custom_data=['Цель'])
     fig_purpose.update_layout(separators=", ")
 
     # 2. График настроения
@@ -194,14 +195,16 @@ else:
                                'Нейтральное': 'blue',
                                'Отрицательное': 'orange',
                                'Конфликт': 'red'
-                           })
+                           },
+                           custom_data=['Настроение'])
     fig_sentiment.update_layout(separators=", ")
 
     with col1:
         st.subheader("Распределение целей звонков")
         purpose_event = st.plotly_chart(fig_purpose, use_container_width=True, on_select="rerun", key="purpose_chart")
         if purpose_event and purpose_event.selection.get("points"):
-            sel = purpose_event.selection["points"][0].get("x")
+            point = purpose_event.selection["points"][0]
+            sel = point.get("customdata", [None])[0] or point.get("x")
             if sel != st.session_state.filters["purpose"]:
                 st.session_state.filters["purpose"] = sel
                 st.session_state.show_table = True
@@ -211,7 +214,8 @@ else:
         st.subheader("Настроение клиентов")
         sentiment_event = st.plotly_chart(fig_sentiment, use_container_width=True, on_select="rerun", key="sentiment_chart")
         if sentiment_event and sentiment_event.selection.get("points"):
-            sel = sentiment_event.selection["points"][0].get("label")
+            point = sentiment_event.selection["points"][0]
+            sel = point.get("customdata", [None])[0] or point.get("label")
             if sel != st.session_state.filters["sentiment"]:
                 st.session_state.filters["sentiment"] = sel
                 st.session_state.show_table = True
@@ -236,7 +240,8 @@ else:
 
     fig_h_count = px.bar(hourly_counts, x='hour', y='count',
                          labels={'count': 'Кол-во звонков', 'hour': 'Час'},
-                         text=hourly_counts['avg_str'])
+                         text=hourly_counts['avg_str'],
+                         custom_data=['hour'])
     fig_h_count.update_traces(textposition='inside')
     fig_h_count.update_layout(xaxis={'tickmode': 'linear', 'tick0': 6, 'dtick': 1}, separators=", ")
 
@@ -257,13 +262,15 @@ else:
         x=hourly_dur['hour'], y=hourly_dur['duration'], name='Ожидание + Разговор',
         marker_color='rgba(100, 149, 237, 0.6)',
         text=hourly_dur['duration_str'], textposition='inside',
-        hovertemplate="Ожидание + Разговор: %{text}<extra></extra>"
+        hovertemplate="Ожидание + Разговор: %{text}<extra></extra>",
+        customdata=hourly_dur['hour']
     ))
     fig_h_dur.add_trace(go.Bar(
         x=hourly_dur['hour'], y=hourly_dur['billsec'], name='Разговор',
         marker_color='rgba(0, 0, 139, 0.8)',
         text=hourly_dur['billsec_str'], textposition='inside',
-        hovertemplate="Разговор: %{text}<extra></extra>"
+        hovertemplate="Разговор: %{text}<extra></extra>",
+        customdata=hourly_dur['hour']
     ))
     fig_h_dur.update_layout(
         barmode='overlay',
@@ -277,21 +284,27 @@ else:
         st.subheader("Звонки по часам")
         hour_event = st.plotly_chart(fig_h_count, use_container_width=True, on_select="rerun", key="hour_chart")
         if hour_event and hour_event.selection.get("points"):
-            sel = int(hour_event.selection["points"][0].get("x"))
-            if sel != st.session_state.filters["hour"]:
-                st.session_state.filters["hour"] = sel
-                st.session_state.show_table = True
-                st.rerun()
+            point = hour_event.selection["points"][0]
+            sel = point.get("customdata", [None])[0] or point.get("x")
+            if sel is not None:
+                sel = int(sel)
+                if sel != st.session_state.filters["hour"]:
+                    st.session_state.filters["hour"] = sel
+                    st.session_state.show_table = True
+                    st.rerun()
 
     with col4:
         st.subheader("Средняя длительность")
         hour_dur_event = st.plotly_chart(fig_h_dur, use_container_width=True, on_select="rerun", key="hour_dur_chart")
         if hour_dur_event and hour_dur_event.selection.get("points"):
-            sel = int(hour_dur_event.selection["points"][0].get("x"))
-            if sel != st.session_state.filters["hour"]:
-                st.session_state.filters["hour"] = sel
-                st.session_state.show_table = True
-                st.rerun()
+            point = hour_dur_event.selection["points"][0]
+            sel = point.get("customdata") or point.get("x")
+            if sel is not None:
+                sel = int(sel)
+                if sel != st.session_state.filters["hour"]:
+                    st.session_state.filters["hour"] = sel
+                    st.session_state.show_table = True
+                    st.rerun()
 
     if st.button("Показать все звонки"):
         st.session_state.filters = {"purpose": None, "sentiment": None, "hour": None}
