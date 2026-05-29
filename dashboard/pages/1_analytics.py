@@ -427,4 +427,23 @@ else:
                     st.audio(res[0])
                 else:
                     st.error("Файл записи не найден.")
+
+            # Добавляем расшифровку
+            st.markdown("#### Расшифровка звонка")
+            transcripts = pd.read_sql(text("""
+                SELECT channel, start_time, text
+                FROM transcripts
+                WHERE linkedid = :lid
+                ORDER BY start_time ASC
+            """), conn, params={"lid": selected_linkedid})
+
+            if not transcripts.empty:
+                for _, row in transcripts.iterrows():
+                    m, s = divmod(int(row['start_time']), 60)
+                    time_str = f"[{m:02d}:{s:02d}]"
+                    label = "👤 **Оператор**" if row['channel'] == 'operator' else "👥 **Клиент**"
+                    st.markdown(f"{time_str} {label}: {row['text']}")
+            else:
+                st.info("Расшифровка для этого звонка отсутствует.")
+
             engine.dispose()
