@@ -181,18 +181,18 @@ else:
         st.session_state.last_date_range = date_range
 
     def get_filtered_df(exclude=None):
-        df_f = processed_df.copy()
+        mask = pd.Series(True, index=processed_df.index)
         if st.session_state.filters["purpose"] and exclude != "purpose":
-            df_f = df_f[df_f['Цель звонка'] == st.session_state.filters["purpose"]]
+            mask &= (processed_df['Цель звонка'] == st.session_state.filters["purpose"])
         if st.session_state.filters["sentiment"] and exclude != "sentiment":
-            df_f = df_f[df_f['Настроение'] == st.session_state.filters["sentiment"]]
+            mask &= (processed_df['Настроение'] == st.session_state.filters["sentiment"])
         if st.session_state.filters["hour"] is not None and exclude != "hour":
-            df_f = df_f[df_f['hour'] == st.session_state.filters["hour"]]
+            mask &= (processed_df['hour'] == st.session_state.filters["hour"])
         if st.session_state.filters["type"] and exclude != "type":
-            df_f = df_f[df_f['Тип звонка'] == st.session_state.filters["type"]]
+            mask &= (processed_df['Тип звонка'] == st.session_state.filters["type"])
         if st.session_state.filters["date"] and exclude != "date":
-            df_f = df_f[df_f['calldate'].dt.date == st.session_state.filters["date"]]
-        return df_f
+            mask &= (processed_df['calldate'].dt.date == st.session_state.filters["date"])
+        return processed_df[mask].copy()
 
     # Отображение активных фильтров
     active_filters_count = len([v for v in st.session_state.filters.values() if v is not None])
