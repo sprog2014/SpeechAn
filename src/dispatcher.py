@@ -1,6 +1,7 @@
 import os
 import time
 import logging
+import sys
 import multiprocessing
 import concurrent.futures
 from datetime import datetime, timedelta
@@ -90,6 +91,13 @@ def task_done_callback(future):
 
 def main():
     logger.info("Starting system initialization...")
+    # Ограничиваем количество потоков для библиотек, использующих OpenMP/MKL
+    # Это должно быть сделано до импорта тяжелых библиотек в воркерах
+    os.environ["OMP_NUM_THREADS"] = "1"
+    os.environ["MKL_NUM_THREADS"] = "1"
+    os.environ["OPENBLAS_NUM_THREADS"] = "1"
+    os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
+    os.environ["NUMEXPR_NUM_THREADS"] = "1"
     # При использовании ProcessPoolExecutor не загружаем модели в родительском процессе,
     # чтобы сэкономить память. Они будут загружены в каждом дочернем процессе.
     logger.info(f"Configuration: NUM_WORKERS={NUM_WORKERS}, RECORDS_ROOT={RECORDS_ROOT}")
