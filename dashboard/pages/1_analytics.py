@@ -255,7 +255,7 @@ else:
     fig_politeness = px.line(daily_politeness, x='date', y='politeness_score',
                              labels={'politeness_score': 'Вежливость', 'date': 'Дата'},
                              markers=True,
-                             range_y=[0, 105]) # Оценка обычно до 100
+                             range_y=[0, 10]) # Оценка от 1 до 10
     fig_politeness.update_layout(separators=", ")
 
     with col_poly:
