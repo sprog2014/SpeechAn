@@ -36,6 +36,7 @@ def get_summary_data(start_date, end_date, prompt_id):
             c.duration,
             c.src,
             c.answeredext,
+            c.processing_status,
             e.client_sentiment,
             e.call_purpose,
             e.call_summary,
@@ -43,8 +44,7 @@ def get_summary_data(start_date, end_date, prompt_id):
             e.politeness_score
         FROM calls c
         LEFT JOIN evaluations e ON c.linkedid = e.linkedid AND e.prompt_id = :pid
-        WHERE c.processing_status = 'done'
-          AND c.calldate >= :start
+        WHERE c.calldate >= :start
           AND c.calldate < :end
         ORDER BY c.calldate DESC
     """), conn, params={
@@ -118,11 +118,11 @@ else:
 
         # 2. Определение типа звонка
         dir_map = {
-            'incoming': 'Входящий',
-            'inbound': 'Входящий',
-            'outgoing': 'Исходящий',
-            'outbound': 'Исходящий',
-            'internal': 'Внутренний'
+            'incoming': '📥',
+            'inbound': '📥',
+            'outgoing': '📤',
+            'outbound': '📤',
+            'internal': '🏠'
         }
         row['Тип звонка'] = dir_map.get(row['direction'], row['direction'])
 
@@ -316,9 +316,9 @@ else:
                          labels={'count': 'Кол-во звонков', 'hour': 'Час', 'Тип звонка': 'Тип'},
                          custom_data=['hour', 'Тип звонка'],
                          color_discrete_map={
-                             'Входящий': 'green',
-                             'Исходящий': 'blue',
-                             'Внутренний': 'orange'
+                             '📥': 'green',
+                             '📤': 'blue',
+                             '🏠': 'orange'
                          })
 
     # Добавляем среднее значение посередине всего столбика
@@ -412,22 +412,43 @@ else:
 
         # Выбор и переименование колонок для отображения
         display_df = filtered_df[[
-            'calldate', 'Тип звонка', 'Номер клиента', 'Имя оператора', 'Продолжительность',
+            'calldate', 'Тип звонка', 'processing_status', 'Номер клиента', 'Имя оператора', 'Продолжительность',
             'Цель звонка', 'Настроение', 'call_summary',
             'Поздоровался', 'Представился', 'Согласована дата', 'Определена цель',
             'Озвучена цена', 'Жалоба решена', 'Попрощался'
         ]].copy()
+
+        status_map = {
+            'done': '✅ Ок',
+            'processing': '⏳ Обработка',
+            'skipped': '⏭️ Пропущено',
+            'error': '❌ Ошибка',
+            'new': '🆕 Новый'
+        }
+        display_df['Статус'] = display_df['processing_status'].map(lambda x: status_map.get(x, x))
 
         display_df.rename(columns={
             'calldate': 'Дата/время',
             'call_summary': 'Краткое содержание'
         }, inplace=True)
 
+        # Удаляем оригинал и оставляем маппинг
+        display_df.drop(columns=['processing_status'], inplace=True)
+
         # Отображение таблицы
         selection = st.dataframe(
             display_df,
             column_config={
                 "Дата/время": st.column_config.DatetimeColumn("Дата/время", format="DD.MM.YYYY HH:mm"),
+                "Тип звонка": st.column_config.TextColumn("📞", help="Тип звонка"),
+                "Продолжительность": st.column_config.TextColumn("⏱️", help="Продолжительность"),
+                "Поздоровался": st.column_config.TextColumn("👋", help="Поздоровался"),
+                "Представился": st.column_config.TextColumn("🆔", help="Представился"),
+                "Согласована дата": st.column_config.TextColumn("📅", help="Согласована дата"),
+                "Определена цель": st.column_config.TextColumn("🎯", help="Определена цель"),
+                "Озвучена цена": st.column_config.TextColumn("💰", help="Озвучена цена"),
+                "Жалоба решена": st.column_config.TextColumn("🛠️", help="Жалоба решена"),
+                "Попрощался": st.column_config.TextColumn("🤝", help="Попрощался")
             },
             hide_index=True,
             on_select="rerun",
