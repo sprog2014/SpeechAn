@@ -118,11 +118,11 @@ else:
 
         # 2. Определение типа звонка
         dir_map = {
-            'incoming': 'Входящий',
-            'inbound': 'Входящий',
-            'outgoing': 'Исходящий',
-            'outbound': 'Исходящий',
-            'internal': 'Внутренний'
+            'incoming': '📥',
+            'inbound': '📥',
+            'outgoing': '📤',
+            'outbound': '📤',
+            'internal': '🏠'
         }
         row['Тип звонка'] = dir_map.get(row['direction'], row['direction'])
 
@@ -316,9 +316,9 @@ else:
                          labels={'count': 'Кол-во звонков', 'hour': 'Час', 'Тип звонка': 'Тип'},
                          custom_data=['hour', 'Тип звонка'],
                          color_discrete_map={
-                             'Входящий': 'green',
-                             'Исходящий': 'blue',
-                             'Внутренний': 'orange'
+                             '📥': 'green',
+                             '📤': 'blue',
+                             '🏠': 'orange'
                          })
 
     # Добавляем среднее значение посередине всего столбика
@@ -440,6 +440,15 @@ else:
             display_df,
             column_config={
                 "Дата/время": st.column_config.DatetimeColumn("Дата/время", format="DD.MM.YYYY HH:mm"),
+                "Тип звонка": st.column_config.TextColumn("📞", help="Тип звонка"),
+                "Продолжительность": st.column_config.TextColumn("⏱️", help="Продолжительность"),
+                "Поздоровался": st.column_config.TextColumn("👋", help="Поздоровался"),
+                "Представился": st.column_config.TextColumn("🆔", help="Представился"),
+                "Согласована дата": st.column_config.TextColumn("📅", help="Согласована дата"),
+                "Определена цель": st.column_config.TextColumn("🎯", help="Определена цель"),
+                "Озвучена цена": st.column_config.TextColumn("💰", help="Озвучена цена"),
+                "Жалоба решена": st.column_config.TextColumn("🛠️", help="Жалоба решена"),
+                "Попрощался": st.column_config.TextColumn("🤝", help="Попрощался")
             },
             hide_index=True,
             on_select="rerun",
