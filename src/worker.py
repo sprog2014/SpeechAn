@@ -123,7 +123,13 @@ def process_file(file_path: str, prompt_id: int = None, force: bool = False):
                 t_asr_start = time.time()
                 logger.info(f"[{linkedid}] Transcribing with VAD segmentation...")
                 # Получаем сразу все сегменты из обоих каналов
-                combined_segments = transcribe_with_vad(left_waveform, right_waveform, sr)
+                # Для входящих звонков: левый канал (waveform[0]) - клиент, правый - оператор
+                # Для исходящих: наоборот
+                if metadata['direction'] == 'incoming':
+                    combined_segments = transcribe_with_vad(right_waveform, left_waveform, sr)
+                else:
+                    combined_segments = transcribe_with_vad(left_waveform, right_waveform, sr)
+
                 asr_duration = time.time() - t_asr_start
 
                 # Сохранение транскриптов
