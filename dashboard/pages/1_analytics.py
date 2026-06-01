@@ -316,7 +316,7 @@ else:
     # Добавляем среднее значение посередине всего столбика
     for _, row_t in hourly_counts.iterrows():
         if row_t['count'] > 0:
-            avg_val = (row_t['count'] / num_days).round(1)
+            avg_val = round(row_t['count'] / num_days, 1)
             avg_str = str(avg_val).replace('.', ',')
             fig_h_count.add_annotation(
                 x=row_t['hour'], y=row_t['count']/2, text=avg_str,
