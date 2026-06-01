@@ -9,7 +9,7 @@ import plotly.graph_objects as go
 # Добавляем путь к src, чтобы найти config.py
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src'))
 from config import PG_CONFIG
-from db_utils import get_all_prompts, get_default_prompt, get_call_file_path, get_call_transcript
+from db_utils import get_all_prompts, get_default_prompt, get_call_file_path, get_call_transcript, format_dialogue
 
 if not st.session_state.get("password_correct", False):
     st.error("Пожалуйста, авторизуйтесь на главной странице.")
@@ -446,5 +446,10 @@ else:
                     time_str = f"[{m:02d}:{s:02d}]"
                     label = "👤 **Оператор**" if trow['channel'] == 'operator' else "👥 **Клиент**"
                     st.markdown(f"{time_str} {label}: {trow['text']}")
+
+                # Добавляем скрытый блок с полным текстом для копирования, если нужно
+                # с использованием общей функции форматирования
+                with st.expander("Весь текст для копирования"):
+                    st.text_area("Текст диалога", format_dialogue(transcript_rows), height=300)
             else:
                 st.info("Расшифровка для этого звонка отсутствует.")
