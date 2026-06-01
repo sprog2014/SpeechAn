@@ -93,15 +93,22 @@ else:
             y=['Обработано', 'Пропущено', 'В обработке', 'В очереди', 'Ошибка'],
             title="Статус обработки по дням",
             labels={'value': 'Количество', 'date': 'Дата', 'variable': 'Статус'},
-            barmode='stack'
+            barmode='stack',
+            color_discrete_map={
+                'Обработано': 'green',
+                'Пропущено': 'gray',
+                'В обработке': 'blue',
+                'В очереди': 'orange',
+                'Ошибка': 'red'
+            }
         )
         fig_daily.update_layout(separators=", ")
-        st.plotly_chart(fig_daily, use_container_width=True)
+        st.plotly_chart(fig_daily, width='stretch')
 
         # Таблица данных
         st.dataframe(
             df_daily,
-            use_container_width=True,
+            width='stretch',
             column_config={
                 "date": "Дата",
                 "total_disk": st.column_config.NumberColumn("Всего", format="%d"),
@@ -136,11 +143,11 @@ else:
 
             pc1, pc2 = st.columns([1, 1])
             with pc1:
-                st.plotly_chart(fig_prompts, use_container_width=True)
+                st.plotly_chart(fig_prompts, width='stretch')
             with pc2:
                 st.dataframe(
                     df_prompts,
-                    use_container_width=True,
+                    width='stretch',
                     column_config={
                         "name": "Название промпта",
                         "count": st.column_config.NumberColumn("Использовано раз", format="%d")
@@ -173,7 +180,7 @@ else:
                 labels={'files_per_hour': 'Файлов в час', 'date': 'Дата'}
             )
             fig_speed.update_layout(separators=", ")
-            st.plotly_chart(fig_speed, use_container_width=True)
+            st.plotly_chart(fig_speed, width='stretch')
         else:
             st.write("Недостаточно данных для расчета скорости")
 
@@ -196,7 +203,7 @@ else:
 
             c1, c2 = st.columns([1, 1])
             with c1:
-                st.plotly_chart(fig_pie, use_container_width=True)
+                st.plotly_chart(fig_pie, width='stretch')
             with c2:
                 def f_num(n):
                     return f"{n:,.2f}".replace(",", " ").replace(".", ",")

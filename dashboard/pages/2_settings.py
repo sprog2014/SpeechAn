@@ -95,7 +95,7 @@ else:
 
         st.dataframe(
             df_display[["Создан", "Название"]],
-            use_container_width=True,
+            width='stretch',
             hide_index=True,
             column_config={
             "Название": st.column_config.TextColumn("Название", help="Жирным выделен промпт по умолчанию")
@@ -109,17 +109,17 @@ else:
 
         col1, col2, col3 = st.columns(3)
 
-        if col1.button("Добавить новый", use_container_width=True):
+        if col1.button("Добавить новый", width='stretch'):
             st.session_state.show_editor = True
             st.session_state.editing_prompt = None
             st.rerun()
 
-        if col2.button("Изменить выбранный", use_container_width=True, disabled=selected_prompt is None):
+        if col2.button("Изменить выбранный", width='stretch', disabled=selected_prompt is None):
             st.session_state.show_editor = True
             st.session_state.editing_prompt = selected_prompt
             st.rerun()
 
-        if col3.button("Сделать по умолчанию", use_container_width=True, disabled=selected_prompt is None):
+        if col3.button("Сделать по умолчанию", width='stretch', disabled=selected_prompt is None):
             set_default_prompt(selected_prompt['id'])
             st.success(f"Промпт '{selected_prompt['name']}' установлен по умолчанию.")
             st.rerun()
@@ -197,11 +197,11 @@ if phones_list:
             "use": st.column_config.CheckboxColumn("Использовать в анализе")
         },
         hide_index=True,
-        use_container_width=True
+        width='stretch'
     )
 
     col_p1, col_p2 = st.columns(2)
-    if col_p1.button("Сохранить изменения", use_container_width=True):
+    if col_p1.button("Сохранить изменения", width='stretch'):
         # Проверяем что изменилось
         for i, row in edited_df.iterrows():
             orig_row = df_phones.iloc[i]
@@ -210,7 +210,7 @@ if phones_list:
         st.success("Изменения сохранены!")
         st.rerun()
 
-    if col_p2.button("Синхронизировать список номеров", use_container_width=True):
+    if col_p2.button("Синхронизировать список номеров", width='stretch'):
         with st.spinner("Синхронизация..."):
             sync_phones_from_external_db()
         st.success("Список номеров синхронизирован!")
