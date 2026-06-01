@@ -511,6 +511,17 @@ def get_call_transcript(linkedid, conn=None):
         with get_pg_connection() as conn:
             return _execute(conn)
 
+def format_dialogue(transcript_rows):
+    """
+    Централизованная сборка текста диалога с русскими метками ролей.
+    Используется как для анализа, так и для вывода на экран.
+    """
+    formatted_lines = []
+    for row in transcript_rows:
+        label = "Оператор" if row['channel'] == 'operator' else "Клиент"
+        formatted_lines.append(f"{label}: {row['text']}")
+    return "\n".join(formatted_lines)
+
 def insert_evaluation(linkedid, prompt_id, result_json, conn=None):
     def _execute(c):
         cur = c.cursor()

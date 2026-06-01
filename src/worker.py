@@ -8,7 +8,7 @@ from db_utils import (
     insert_transcript, insert_evaluation, get_pg_connection,
     get_default_prompt, get_prompt_by_id, check_transcript_exists, check_evaluation_exists,
     set_processing_duration, check_phone_usage, get_system_setting, is_phone_registered,
-    insert_processing_stats, set_call_status
+    insert_processing_stats, set_call_status, format_dialogue
 )
 from asr import transcribe_with_vad
 from llm_analysis import analyze_transcript
@@ -123,25 +123,29 @@ def process_file(file_path: str, prompt_id: int = None, force: bool = False):
                 t_asr_start = time.time()
                 logger.info(f"[{linkedid}] Transcribing with VAD segmentation...")
                 # Получаем сразу все сегменты из обоих каналов
-                # Оператор всегда в левом канале, клиент в правом
-                combined_segments = transcribe_with_vad(left_waveform, right_waveform, sr)
+                # По вашей просьбе: меняем местами логику.
+                # Если входящий: левый - оператор, правый - клиент.
+                # Если исходящий: левый - клиент, правый - оператор.
+                if metadata['direction'] == 'incoming':
+                    combined_segments = transcribe_with_vad(left_waveform, right_waveform, sr)
+                else:
+                    combined_segments = transcribe_with_vad(right_waveform, left_waveform, sr)
+
                 asr_duration = time.time() - t_asr_start
 
                 # Сохранение транскриптов
-                all_segments = []
+                transcript_rows = []
                 for start, end, channel, text in combined_segments:
                     insert_transcript(linkedid, channel, start, end, text, conn=pg_conn)
-                    label = "Operator" if channel == "operator" else "Client"
-                    all_segments.append((start, f"{label}: {text}"))
+                    transcript_rows.append({'channel': channel, 'text': text})
 
-                all_segments.sort(key=lambda x: x[0])
-                full_dialogue = "\n".join([s[1] for s in all_segments])
+                full_dialogue = format_dialogue(transcript_rows)
             else:
                 logger.info(f"[{linkedid}] Transcript already exists in DB. Skipping ASR/Emotion.")
-                cur = pg_conn.cursor()
-                cur.execute("SELECT channel, text, start_time FROM transcripts WHERE linkedid = %s ORDER BY start_time", (linkedid,))
+                cur = pg_conn.cursor(cursor_factory=RealDictCursor)
+                cur.execute("SELECT channel, text FROM transcripts WHERE linkedid = %s ORDER BY start_time", (linkedid,))
                 rows = cur.fetchall()
-                full_dialogue = "\n".join([f"{r[0].capitalize()}: {r[1]}" for r in rows])
+                full_dialogue = format_dialogue(rows)
 
             if full_dialogue.strip():
                 t_llm_start = time.time()
