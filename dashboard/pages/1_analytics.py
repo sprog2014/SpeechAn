@@ -222,9 +222,49 @@ else:
             st.session_state.show_table = False
             st.rerun()
 
-    col1, col2, col_poly = st.columns(3)
+    col1, col2, col3 = st.columns(3)
 
-    # 1. График целей
+    # ПОДГОТОВКА ДАННЫХ ДЛЯ ПЕРВОГО РЯДА
+    num_days = (end_date - start_date).days + 1
+    if num_days <= 0: num_days = 1
+    all_hours = pd.DataFrame({'hour': range(6, 23)})
+
+    # 1.1 Звонки по часам
+    df_h = get_filtered_df(exclude="hour")
+    hourly_data = df_h[(df_h['hour'] >= 6) & (df_h['hour'] <= 22)].copy()
+    hourly_totals = hourly_data.groupby('hour', observed=False).size().reset_index(name='count')
+    hourly_counts = pd.DataFrame({'hour': range(6, 23)}).merge(hourly_totals, on='hour', how='left').fillna({'count': 0})
+
+    fig_h_count = px.bar(hourly_counts, x='hour', y='count',
+                         labels={'count': 'Кол-во звонков', 'hour': 'Час'},
+                         custom_data=['hour'])
+    fig_h_count.update_traces(marker_color='royalblue')
+    for _, row_t in hourly_counts.iterrows():
+        if row_t['count'] > 0:
+            avg_val = round(row_t['count'] / num_days, 1)
+            avg_str = str(avg_val).replace('.', ',')
+            fig_h_count.add_annotation(
+                x=row_t['hour'], y=row_t['count']/2, text=avg_str,
+                showarrow=False, font=dict(color="white", size=12)
+            )
+    fig_h_count.update_layout(xaxis={'tickmode': 'linear', 'tick0': 6, 'dtick': 1}, separators=", ")
+
+    # 1.2 Средняя длительность
+    hourly_dur = hourly_data.groupby('hour')[['duration', 'billsec']].mean().reset_index()
+    hourly_dur = all_hours.merge(hourly_dur, on='hour', how='left').fillna(0)
+    def format_mmss(sec):
+        if sec <= 0: return "00:00"
+        m, s = divmod(int(sec), 60)
+        return f"{m:02d}:{s:02d}"
+    hourly_dur['billsec_str'] = hourly_dur['billsec'].apply(format_mmss)
+    fig_h_dur = px.bar(hourly_dur, x='hour', y='billsec',
+                       labels={'billsec': 'Среднее время (сек)', 'hour': 'Час'},
+                       text='billsec_str',
+                       custom_data=['hour'])
+    fig_h_dur.update_traces(marker_color='indianred', textposition='inside')
+    fig_h_dur.update_layout(xaxis={'tickmode': 'linear', 'tick0': 6, 'dtick': 1}, separators=", ")
+
+    # 1.3 Распределение целей
     df_p = get_filtered_df(exclude="purpose")
     purpose_counts = df_p['Цель звонка'].value_counts().reset_index()
     purpose_counts.columns = ['Цель', 'Количество']
@@ -233,7 +273,43 @@ else:
                          custom_data=['Цель'])
     fig_purpose.update_layout(separators=", ")
 
-    # 2. График настроения
+    with col1:
+        st.subheader("Звонки по часам")
+        hour_event = st.plotly_chart(fig_h_count, use_container_width=True, on_select="rerun", key="hour_chart")
+        if hour_event and hour_event.selection.get("points"):
+            point = hour_event.selection["points"][0]
+            h_sel = point.get("customdata", [None])[0] or point.get("x")
+            if h_sel is not None:
+                st.session_state.filters["hour"] = int(h_sel)
+                st.session_state.show_table = True
+                st.rerun()
+
+    with col2:
+        st.subheader("Средняя длительность")
+        hour_dur_event = st.plotly_chart(fig_h_dur, use_container_width=True, on_select="rerun", key="hour_dur_chart")
+        if hour_dur_event and hour_dur_event.selection.get("points"):
+            point = hour_dur_event.selection["points"][0]
+            sel = point.get("customdata", [None])[0] or point.get("x")
+            if sel is not None:
+                st.session_state.filters["hour"] = int(sel)
+                st.session_state.show_table = True
+                st.rerun()
+
+    with col3:
+        st.subheader("Распределение целей")
+        purpose_event = st.plotly_chart(fig_purpose, use_container_width=True, on_select="rerun", key="purpose_chart")
+        if purpose_event and purpose_event.selection.get("points"):
+            point = purpose_event.selection["points"][0]
+            sel = point.get("customdata", [None])[0] or point.get("x")
+            if sel != st.session_state.filters["purpose"]:
+                st.session_state.filters["purpose"] = sel
+                st.session_state.show_table = True
+                st.rerun()
+
+    # РЯД 2: Настроение (1/3) и Вежливость по операторам (2/3)
+    col4, col5 = st.columns([1, 2])
+
+    # 2.1 Настроение
     df_s = get_filtered_df(exclude="sentiment")
     sentiment_counts = df_s['Настроение'].value_counts().reset_index()
     sentiment_counts.columns = ['Настроение', 'Количество']
@@ -248,18 +324,20 @@ else:
                            custom_data=['Настроение'])
     fig_sentiment.update_layout(separators=", ")
 
-    with col1:
-        st.subheader("Распределение целей звонков")
-        purpose_event = st.plotly_chart(fig_purpose, use_container_width=True, on_select="rerun", key="purpose_chart")
-        if purpose_event and purpose_event.selection.get("points"):
-            point = purpose_event.selection["points"][0]
-            sel = point.get("customdata", [None])[0] or point.get("x")
-            if sel != st.session_state.filters["purpose"]:
-                st.session_state.filters["purpose"] = sel
-                st.session_state.show_table = True
-                st.rerun()
+    # 2.2 Вежливость по операторам
+    df_poly = get_filtered_df() # Здесь можно не исключать фильтры, или исключать специфические
+    # Оставляем только те звонки, где есть оценка вежливости
+    df_poly_valid = df_poly[df_poly['politeness_score'].notnull()].copy()
+    operator_politeness = df_poly_valid.groupby('Имя оператора')['politeness_score'].mean().reset_index()
+    operator_politeness['politeness_score'] = operator_politeness['politeness_score'].round(2)
+    operator_politeness = operator_politeness.sort_values('politeness_score', ascending=False)
 
-    with col2:
+    fig_poly_op = px.bar(operator_politeness, x='Имя оператора', y='politeness_score',
+                         labels={'politeness_score': 'Средняя вежливость', 'Имя оператора': 'Оператор'},
+                         range_y=[0, 10], text='politeness_score')
+    fig_poly_op.update_layout(separators=", ")
+
+    with col4:
         st.subheader("Настроение клиентов")
         sentiment_event = st.plotly_chart(fig_sentiment, use_container_width=True, on_select="rerun", key="sentiment_chart")
         if sentiment_event and sentiment_event.selection.get("points"):
@@ -270,107 +348,9 @@ else:
                 st.session_state.show_table = True
                 st.rerun()
 
-    # Линейный график вежливости
-    df_poly = get_filtered_df(exclude="date")
-    df_poly['date'] = df_poly['calldate'].dt.date
-    # Группируем и берем среднее, игнорируя NaN
-    daily_politeness = df_poly.groupby('date')['politeness_score'].mean().reset_index()
-    daily_politeness['politeness_score'] = daily_politeness['politeness_score'].round(2)
-
-    fig_politeness = px.line(daily_politeness, x='date', y='politeness_score',
-                             labels={'politeness_score': 'Вежливость', 'date': 'Дата'},
-                             markers=True,
-                             range_y=[0, 10]) # Оценка от 1 до 10
-    fig_politeness.update_layout(separators=", ")
-
-    with col_poly:
-        st.subheader("Вежливость по дням")
-        st.plotly_chart(fig_politeness, use_container_width=True)
-
-    col3, col4 = st.columns(2)
-
-    # Подготовка данных для почасовых графиков
-    df_h = get_filtered_df(exclude="hour")
-    num_days = (end_date - start_date).days + 1
-    if num_days <= 0: num_days = 1
-
-    all_hours = pd.DataFrame({'hour': range(6, 23)})
-
-    # 3. Распределение по часам (количество)
-    hourly_data = df_h[(df_h['hour'] >= 6) & (df_h['hour'] <= 22)].copy()
-
-    # Считаем общее кол-во по часам для отображения среднего значения на столбике
-    hourly_totals = hourly_data.groupby('hour', observed=False).size().reset_index(name='count')
-    hourly_totals['avg'] = (hourly_totals['count'] / num_days).round(1)
-    hourly_totals['avg_str'] = hourly_totals['avg'].apply(lambda x: str(x).replace('.', ','))
-
-    # Обеспечиваем наличие всех часов
-    all_hours_df = pd.DataFrame({'hour': range(6, 23)})
-    hourly_counts = all_hours_df.merge(hourly_totals, on='hour', how='left').fillna({'count': 0})
-
-    fig_h_count = px.bar(hourly_counts, x='hour', y='count',
-                         labels={'count': 'Кол-во звонков', 'hour': 'Час'},
-                         custom_data=['hour'])
-    fig_h_count.update_traces(marker_color='royalblue')
-
-    # Добавляем среднее значение посередине всего столбика
-    for _, row_t in hourly_counts.iterrows():
-        if row_t['count'] > 0:
-            avg_val = round(row_t['count'] / num_days, 1)
-            avg_str = str(avg_val).replace('.', ',')
-            fig_h_count.add_annotation(
-                x=row_t['hour'], y=row_t['count']/2, text=avg_str,
-                showarrow=False, font=dict(color="white", size=12)
-            )
-
-    fig_h_count.update_layout(xaxis={'tickmode': 'linear', 'tick0': 6, 'dtick': 1}, separators=", ")
-
-    # 4. Средняя продолжительность
-    hourly_dur = df_h[(df_h['hour'] >= 6) & (df_h['hour'] <= 22)].groupby('hour')[['duration', 'billsec']].mean().reset_index()
-    hourly_dur = all_hours.merge(hourly_dur, on='hour', how='left').fillna(0)
-
-    def format_mmss(sec):
-        if sec <= 0: return "00:00"
-        m, s = divmod(int(sec), 60)
-        return f"{m:02d}:{s:02d}"
-
-    hourly_dur['billsec_str'] = hourly_dur['billsec'].apply(format_mmss)
-
-    fig_h_dur = px.bar(hourly_dur, x='hour', y='billsec',
-                       labels={'billsec': 'Среднее время (сек)', 'hour': 'Час'},
-                       text='billsec_str',
-                       custom_data=['hour'])
-    fig_h_dur.update_traces(marker_color='indianred', textposition='inside')
-    fig_h_dur.update_layout(
-        xaxis={'tickmode': 'linear', 'tick0': 6, 'dtick': 1},
-        separators=", "
-    )
-
-    with col3:
-        st.subheader("Звонки по часам")
-        hour_event = st.plotly_chart(fig_h_count, use_container_width=True, on_select="rerun", key="hour_chart")
-        if hour_event and hour_event.selection.get("points"):
-            point = hour_event.selection["points"][0]
-            h_sel = point.get("customdata", [None])[0] or point.get("x")
-            if h_sel is not None:
-                h_sel = int(h_sel)
-                if h_sel != st.session_state.filters["hour"]:
-                    st.session_state.filters["hour"] = h_sel
-                    st.session_state.show_table = True
-                    st.rerun()
-
-    with col4:
-        st.subheader("Средняя длительность")
-        hour_dur_event = st.plotly_chart(fig_h_dur, use_container_width=True, on_select="rerun", key="hour_dur_chart")
-        if hour_dur_event and hour_dur_event.selection.get("points"):
-            point = hour_dur_event.selection["points"][0]
-            sel = point.get("customdata") or point.get("x")
-            if sel is not None:
-                sel = int(sel)
-                if sel != st.session_state.filters["hour"]:
-                    st.session_state.filters["hour"] = sel
-                    st.session_state.show_table = True
-                    st.rerun()
+    with col5:
+        st.subheader("Вежливость по операторам")
+        st.plotly_chart(fig_poly_op, use_container_width=True)
 
     if st.button("Показать все звонки"):
         st.session_state.filters = {"purpose": None, "sentiment": None, "hour": None, "type": None, "date": None}
