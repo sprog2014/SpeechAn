@@ -18,6 +18,20 @@ from logging_utils import setup_logging
 setup_logging()
 logger = logging.getLogger(__name__)
 
+def normalize_waveform(waveform: torch.Tensor, target_peak: float = 0.9, max_gain: float = 10.0):
+    """
+    Нормализует громкость тензора (один канал) по пиковому значению.
+    target_peak: целевой уровень пика (0.9 ≈ -1dB)
+    max_gain: максимальный коэффициент усиления (чтобы не задирать шум в тишине)
+    """
+    peak = torch.max(torch.abs(waveform)).item()
+    if peak > 1e-5:
+        gain = target_peak / peak
+        if gain > max_gain:
+            gain = max_gain
+        return waveform * gain, gain
+    return waveform, 1.0
+
 def process_file(file_path: str, prompt_id: int = None, force: bool = False):
     base = os.path.basename(file_path)
     linkedid = os.path.splitext(base)[0]
@@ -117,7 +131,12 @@ def process_file(file_path: str, prompt_id: int = None, force: bool = False):
                     left_waveform = waveform[0]
                     right_waveform = waveform[1]
 
-                logger.debug(f"[{linkedid}] Audio loaded in {time.time()-t0:.2f}s")
+                # Нормализация каждого канала отдельно
+                left_waveform, left_gain = normalize_waveform(left_waveform)
+                right_waveform, right_gain = normalize_waveform(right_waveform)
+                logger.info(f"[{linkedid}] Normalization: Left gain: {left_gain:.2f}x, Right gain: {right_gain:.2f}x")
+
+                logger.debug(f"[{linkedid}] Audio loaded and normalized in {time.time()-t0:.2f}s")
 
                 # 7. Транскрибация и Эмоции
                 t_asr_start = time.time()
