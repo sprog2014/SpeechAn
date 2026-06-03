@@ -55,22 +55,22 @@ else:
         # Добавляем данные с диска
         df_daily['total_disk'] = df_daily['date'].apply(lambda d: disk_counts.get(d, 0))
 
-        # Считаем очередь: Всего на диске - (Обработано + Пропущено + В процессе + Ошибки)
-        df_daily['queued'] = df_daily['total_disk'] - (df_daily['processed'] + df_daily['skipped'] + df_daily['in_progress'] + df_daily['error'])
+        # Считаем очередь: Всего на диске - (Обработано + Пропущено + В процессе + Транскрибировано + Ошибки)
+        df_daily['queued'] = df_daily['total_disk'] - (df_daily['processed'] + df_daily['skipped'] + df_daily['in_progress'] + df_daily['transcribed'] + df_daily['error'])
         # Очередь не может быть отрицательной
         df_daily['queued'] = df_daily['queued'].apply(lambda x: max(0, x))
 
         total_calls = df_daily['total_disk'].sum()
         total_processed = df_daily['processed'].sum()
         total_skipped = df_daily['skipped'].sum()
-        total_in_progress = df_daily['in_progress'].sum()
+        total_transcribed = df_daily['transcribed'].sum()
         total_queued = df_daily['queued'].sum()
 
         m1, m2, m3, m4, m5 = st.columns(5)
         m1.metric("Всего на диске", f"{total_calls:,}".replace(",", " "))
         m2.metric("Обработано", f"{total_processed:,}".replace(",", " "))
         m3.metric("Пропущено", f"{total_skipped:,}".replace(",", " "))
-        m4.metric("В обработке", f"{total_in_progress:,}".replace(",", " "))
+        m4.metric("Транскрибировано", f"{total_transcribed:,}".replace(",", " "))
         m5.metric("В очереди", f"{total_queued:,}".replace(",", " "))
 
         st.divider()
@@ -82,24 +82,22 @@ else:
         df_plot_daily = df_daily.rename(columns={
             'processed': 'Обработано',
             'skipped': 'Пропущено',
-            'in_progress': 'В обработке',
-            'queued': 'В очереди',
-            'error': 'Ошибка'
+            'transcribed': 'Транскрибировано',
+            'queued': 'В очереди'
         })
 
         fig_daily = px.bar(
             df_plot_daily,
             x='date',
-            y=['Обработано', 'Пропущено', 'В обработке', 'В очереди', 'Ошибка'],
+            y=['Обработано', 'Пропущено', 'Транскрибировано', 'В очереди'],
             title="Статус обработки по дням",
             labels={'value': 'Количество', 'date': 'Дата', 'variable': 'Статус'},
             barmode='stack',
             color_discrete_map={
                 'Обработано': 'green',
                 'Пропущено': 'gray',
-                'В обработке': 'blue',
-                'В очереди': 'orange',
-                'Ошибка': 'red'
+                'Транскрибировано': 'blue',
+                'В очереди': 'orange'
             }
         )
         fig_daily.update_layout(separators=", ")
@@ -113,6 +111,7 @@ else:
                 "date": "Дата",
                 "total_disk": st.column_config.NumberColumn("Всего", format="%d"),
                 "skipped": st.column_config.NumberColumn("Пропущено", format="%d"),
+                "transcribed": st.column_config.NumberColumn("Транскрибировано", format="%d"),
                 "processed": st.column_config.NumberColumn("Обработано", format="%d"),
                 "in_progress": st.column_config.NumberColumn("В обработке", format="%d"),
                 "queued": st.column_config.NumberColumn("В очереди", format="%d"),
