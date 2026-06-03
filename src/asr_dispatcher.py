@@ -91,8 +91,9 @@ def main():
                     if len(processing_now) < NUM_ASR_WORKERS:
                         # 1. Check current (today/yesterday)
                         files = scan_current_files()
-                        if files:
-                            f_path = files[0]
+                        available_files = [f for f in files if os.path.splitext(os.path.basename(f))[0] not in processing_now]
+                        if available_files:
+                            f_path = available_files[0]
                             linkedid = os.path.splitext(os.path.basename(f_path))[0]
                             processing_now.add(linkedid)
                             future = executor.submit(process_asr, f_path)
@@ -110,8 +111,9 @@ def main():
                                 update_task_status(task['id'], asr_status='processing')
 
                             task_files = get_task_files(task)
-                            if task_files:
-                                f_path = task_files[0]
+                            available_task_files = [f for f in task_files if os.path.splitext(os.path.basename(f))[0] not in processing_now]
+                            if available_task_files:
+                                f_path = available_task_files[0]
                                 linkedid = os.path.splitext(os.path.basename(f_path))[0]
                                 processing_now.add(linkedid)
                                 future = executor.submit(process_asr, f_path)
@@ -120,7 +122,12 @@ def main():
                                 task_found = True
                                 break
                             else:
-                                update_task_status(task['id'], asr_status='completed')
+                                # ASR task is completed only if all files for the period are processed
+                                # and the end_date is in the past (to avoid closing task for today prematurely)
+                                # or if we are sure no more files will come.
+                                # Simplified: if it's not today, we can complete it.
+                                if task['end_date'] < datetime.now().date():
+                                    update_task_status(task['id'], asr_status='completed')
 
                         if not task_found and not processing_now:
                             time.sleep(5)
