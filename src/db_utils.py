@@ -111,6 +111,81 @@ def upsert_call(metadata, file_path, conn=None):
         with get_pg_connection() as conn:
             _execute(conn)
 
+def get_all_tasks(conn=None):
+    def _execute(c):
+        cur = c.cursor(cursor_factory=RealDictCursor)
+        cur.execute("""
+            SELECT t.*, p.name as prompt_name
+            FROM tasks t
+            JOIN prompts p ON t.prompt_id = p.id
+            ORDER BY t.created_at DESC
+        """)
+        return cur.fetchall()
+
+    if conn:
+        return _execute(conn)
+    else:
+        with get_pg_connection() as conn:
+            return _execute(conn)
+
+def add_task(prompt_id, start_date, end_date, analyze_all, conn=None):
+    def _execute(c):
+        cur = c.cursor()
+        cur.execute("""
+            INSERT INTO tasks (prompt_id, start_date, end_date, analyze_all)
+            VALUES (%s, %s, %s, %s)
+        """, (prompt_id, start_date, end_date, analyze_all))
+        c.commit()
+
+    if conn:
+        _execute(conn)
+    else:
+        with get_pg_connection() as conn:
+            _execute(conn)
+
+def delete_task(task_id, conn=None):
+    def _execute(c):
+        cur = c.cursor()
+        cur.execute("DELETE FROM tasks WHERE id = %s", (task_id,))
+        c.commit()
+
+    if conn:
+        _execute(conn)
+    else:
+        with get_pg_connection() as conn:
+            _execute(conn)
+
+def update_task_status(task_id, asr_status=None, llm_status=None, conn=None):
+    def _execute(c):
+        cur = c.cursor()
+        if asr_status:
+            cur.execute("UPDATE tasks SET asr_status = %s WHERE id = %s", (asr_status, task_id))
+        if llm_status:
+            cur.execute("UPDATE tasks SET llm_status = %s WHERE id = %s", (llm_status, task_id))
+        c.commit()
+
+    if conn:
+        _execute(conn)
+    else:
+        with get_pg_connection() as conn:
+            _execute(conn)
+
+def get_active_tasks(conn=None):
+    def _execute(c):
+        cur = c.cursor(cursor_factory=RealDictCursor)
+        cur.execute("""
+            SELECT * FROM tasks
+            WHERE asr_status != 'completed' OR llm_status != 'completed'
+            ORDER BY created_at ASC
+        """)
+        return cur.fetchall()
+
+    if conn:
+        return _execute(conn)
+    else:
+        with get_pg_connection() as conn:
+            return _execute(conn)
+
 def insert_processing_stats(linkedid, asr_dur, llm_dur, total_dur, conn=None):
     def _execute(c):
         cur = c.cursor()

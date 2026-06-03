@@ -36,14 +36,33 @@ def run_process(command, name, output_queue):
 
     return p
 
+def startup_cleanup():
+    print("Performing startup cleanup...")
+    from db_utils import get_pg_connection
+    try:
+        with get_pg_connection() as conn:
+            cur = conn.cursor()
+            cur.execute("DELETE FROM calls WHERE processing_status = 'processing'")
+            deleted_count = cur.rowcount
+            conn.commit()
+            print(f"Cleanup finished. Removed {deleted_count} stale 'processing' records.")
+    except Exception as e:
+        print(f"Error during startup cleanup: {e}")
+
 def main():
+    startup_cleanup()
     output_queue = queue.Queue()
     processes = []
 
-    # 1. Запуск диспетчера (анализ)
-    dispatcher_cmd = ["python3", "src/dispatcher.py"]
-    dispatcher_proc = run_process(dispatcher_cmd, "Dispatcher", output_queue)
-    processes.append((dispatcher_proc, "Dispatcher"))
+    # 1. Запуск ASR диспетчера
+    asr_dispatcher_cmd = ["python3", "src/asr_dispatcher.py"]
+    asr_dispatcher_proc = run_process(asr_dispatcher_cmd, "ASR Dispatcher", output_queue)
+    processes.append((asr_dispatcher_proc, "ASR Dispatcher"))
+
+    # 2. Запуск LLM диспетчера
+    llm_dispatcher_cmd = ["python3", "src/llm_dispatcher.py"]
+    llm_dispatcher_proc = run_process(llm_dispatcher_cmd, "LLM Dispatcher", output_queue)
+    processes.append((llm_dispatcher_proc, "LLM Dispatcher"))
 
     # 2. Запуск Streamlit (веб-интерфейс)
     dashboard_cmd = ["python3", "-m", "streamlit", "run", "dashboard/dashboard.py", "--server.port", "80", "--server.address", "0.0.0.0"]
