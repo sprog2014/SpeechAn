@@ -34,6 +34,9 @@ def process_llm(linkedid: str, prompt_id: int, analyze_all: bool = False):
                 logger.error(f"[{linkedid}] Prompt not found")
                 return False
 
+            # Set status to processing
+            set_call_status(linkedid, 'processing', conn=pg_conn)
+
             # 3. Phone filtering (if not analyze_all)
             if not analyze_all:
                 cur = pg_conn.cursor()

@@ -18,13 +18,13 @@ def get_today_yesterday_calls(prompt_id):
     try:
         with get_pg_connection() as conn:
             cur = conn.cursor()
-            # Find calls from today/yesterday that are 'transcribed' but no evaluation for the default prompt
+            # Find calls from today/yesterday that are 'transcribed' or 'done' but no evaluation for the default prompt
             cur.execute("""
                 SELECT c.linkedid
                 FROM calls c
                 LEFT JOIN evaluations e ON c.linkedid = e.linkedid AND e.prompt_id = %s
                 WHERE c.calldate >= CURRENT_DATE - INTERVAL '1 day'
-                AND c.processing_status = 'transcribed'
+                AND c.processing_status IN ('transcribed', 'done')
                 AND e.linkedid IS NULL
             """, (prompt_id,))
             return [row[0] for row in cur.fetchall()]
@@ -36,14 +36,18 @@ def get_task_calls(task):
     try:
         with get_pg_connection() as conn:
             cur = conn.cursor()
+            statuses = ['transcribed', 'done']
+            if task.get('analyze_all'):
+                statuses.append('skipped')
+
             cur.execute("""
                 SELECT c.linkedid
                 FROM calls c
                 LEFT JOIN evaluations e ON c.linkedid = e.linkedid AND e.prompt_id = %s
                 WHERE c.calldate::date >= %s AND c.calldate::date <= %s
-                AND c.processing_status = 'transcribed'
+                AND c.processing_status = ANY(%s)
                 AND e.linkedid IS NULL
-            """, (task['prompt_id'], task['start_date'], task['end_date']))
+            """, (task['prompt_id'], task['start_date'], task['end_date'], statuses))
             return [row[0] for row in cur.fetchall()]
     except Exception as e:
         logger.error(f"Error fetching task calls: {e}")
@@ -75,14 +79,14 @@ def main():
 
                         # 1. Check current (today/yesterday)
                         calls = get_today_yesterday_calls(default_prompt['id'])
-                        if calls:
-                            linkedid = next(cid for cid in calls if cid not in processing_now)
-                            if linkedid:
-                                processing_now.add(linkedid)
-                                future = executor.submit(process_llm, linkedid, default_prompt['id'], False)
-                                future.linkedid = linkedid
-                                future.add_done_callback(task_done_callback)
-                                continue
+                        available_calls = [cid for cid in calls if cid not in processing_now]
+                        if available_calls:
+                            linkedid = available_calls[0]
+                            processing_now.add(linkedid)
+                            future = executor.submit(process_llm, linkedid, default_prompt['id'], False)
+                            future.linkedid = linkedid
+                            future.add_done_callback(task_done_callback)
+                            continue
 
                         # 2. Check tasks
                         tasks = get_active_tasks()
@@ -94,17 +98,19 @@ def main():
                                 update_task_status(task['id'], llm_status='processing')
 
                             task_calls = get_task_calls(task)
-                            if task_calls:
-                                linkedid = next(cid for cid in task_calls if cid not in processing_now)
-                                if linkedid:
-                                    processing_now.add(linkedid)
-                                    future = executor.submit(process_llm, linkedid, task['prompt_id'], task['analyze_all'])
-                                    future.linkedid = linkedid
-                                    future.add_done_callback(task_done_callback)
-                                    task_found = True
-                                    break
+                            available_task_calls = [cid for cid in task_calls if cid not in processing_now]
+                            if available_task_calls:
+                                linkedid = available_task_calls[0]
+                                processing_now.add(linkedid)
+                                future = executor.submit(process_llm, linkedid, task['prompt_id'], task['analyze_all'])
+                                future.linkedid = linkedid
+                                future.add_done_callback(task_done_callback)
+                                task_found = True
+                                break
                             else:
-                                update_task_status(task['id'], llm_status='completed')
+                                # LLM task is completed only if ASR part is completed AND no more calls left to process
+                                if task['asr_status'] == 'completed':
+                                    update_task_status(task['id'], llm_status='completed')
 
                         if not task_found and not processing_now:
                             time.sleep(5)

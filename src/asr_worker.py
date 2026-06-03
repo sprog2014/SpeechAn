@@ -46,7 +46,7 @@ def process_asr(file_path: str):
                 logger.error(f"[{linkedid}] Failed to fetch metadata: {e}")
                 return False
 
-            # 3. Upsert call record
+            # 3. Upsert call record (this sets status to 'processing')
             upsert_call(metadata, file_path, conn=pg_conn)
 
             # 4. Transcribe
