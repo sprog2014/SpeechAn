@@ -15,7 +15,8 @@ from db_utils import (
     get_system_running_status, set_system_running_status,
     get_all_prompts, upsert_prompt, delete_prompt, set_default_prompt,
     get_pg_connection, get_all_phones, update_phone_use, sync_phones_from_external_db,
-    get_system_setting, set_system_setting
+    get_system_setting, set_system_setting,
+    get_all_tasks, add_task, delete_task
 )
 from config import PG_CONFIG
 
@@ -136,41 +137,60 @@ else:
             st.session_state.editing_prompt = None
             st.rerun()
 
-# --- Раздел 3: Ручной запуск ---
-st.header("Ручной запуск")
-with st.form("manual_run_form"):
-    today = datetime.now().date()
-    default_start = today - timedelta(days=1)
-    date_range = st.date_input("Выберите диапазон дат", (default_start, today))
+# --- Раздел 3: Задания на анализ (вместо Ручного запуска) ---
+st.header("Задания на анализ")
 
-    prompt_options = {p['id']: p['name'] for p in prompts} if prompts else {}
-    selected_manual_prompt = st.selectbox("Промпт", options=list(prompt_options.keys()), format_func=lambda x: prompt_options[x])
+# Форма добавления задания
+with st.expander("Добавить новое задание"):
+    with st.form("add_task_form"):
+        today = datetime.now().date()
+        date_range = st.date_input("Период анализа", (today - timedelta(days=7), today))
 
-    submit_manual = st.form_submit_button("Запустить повторную обработку")
+        prompt_options = {p['id']: p['name'] for p in prompts} if prompts else {}
+        task_prompt_id = st.selectbox("Промпт", options=list(prompt_options.keys()), format_func=lambda x: prompt_options[x])
 
-    if submit_manual:
-        if not (isinstance(date_range, tuple) and len(date_range) == 2):
-            st.error("Выберите диапазон дат (начало и конец).")
-        elif selected_manual_prompt:
-            date_start, date_end = date_range
-            script_path = os.path.join(SRC_DIR, "manual_run.py")
-            cmd = [
-                "python3", script_path,
-                date_start.strftime("%Y-%m-%d"),
-                date_end.strftime("%Y-%m-%d"),
-                "--prompt_id", str(selected_manual_prompt),
-                "--ignore-stop-flag"
-            ]
+        analyze_all = st.checkbox("Анализировать все звонки (игнорировать фильтр по телефонам)", value=False)
 
-            # Передаем окружение с PYTHONPATH
-            env = os.environ.copy()
-            env["PYTHONPATH"] = f"{env.get('PYTHONPATH', '')}:{PROJECT_ROOT}:{SRC_DIR}"
+        submit_task = st.form_submit_button("Добавить задание")
 
-            # Не используем PIPE, чтобы избежать зависаний при переполнении буфера
-            process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env, cwd=PROJECT_ROOT)
-            st.info(f"Процесс ручного запуска инициирован (PID: {process.pid}).")
-        else:
-            st.error("Выберите промпт для запуска.")
+        if submit_task:
+            if not (isinstance(date_range, tuple) and len(date_range) == 2):
+                st.error("Выберите диапазон дат.")
+            elif task_prompt_id:
+                add_task(task_prompt_id, date_range[0], date_range[1], analyze_all)
+                st.success("Задание добавлено!")
+                st.rerun()
+
+# Список заданий
+tasks = get_all_tasks()
+if tasks:
+    def get_status_icon(status):
+        if status == 'planned': return "🆕"
+        if status == 'processing': return "⏳"
+        if status == 'completed': return "✅"
+        return status
+
+    task_data = []
+    for t in tasks:
+        task_data.append({
+            "ID": t['id'],
+            "Дата создания": t['created_at'].strftime("%Y-%m-%d %H:%M"),
+            "Промпт": t['prompt_name'],
+            "Период": f"{t['start_date']} - {t['end_date']}",
+            "ASR": get_status_icon(t['asr_status']),
+            "LLM": get_status_icon(t['llm_status']),
+            "Все": "✅" if t['analyze_all'] else "❌"
+        })
+
+    st.dataframe(pd.DataFrame(task_data), hide_index=True, width='stretch')
+
+    task_to_delete = st.selectbox("Удалить задание (ID)", options=[t['id'] for t in tasks])
+    if st.button("Удалить выбранное задание"):
+        delete_task(task_to_delete)
+        st.success("Задание удалено!")
+        st.rerun()
+else:
+    st.info("Нет активных или запланированных заданий.")
 
 # --- Раздел 4: Телефонный справочник ---
 st.header("Телефонный справочник")

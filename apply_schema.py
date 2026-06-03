@@ -27,36 +27,26 @@ def apply_schema_updates():
         conn = psycopg2.connect(**PG_CONFIG)
         cur = conn.cursor()
 
-        print("Updating processing_status check constraint...")
-        # Drop old constraint
-        cur.execute("""
-            ALTER TABLE calls DROP CONSTRAINT IF EXISTS calls_processing_status_check;
-        """)
-        # Add new constraint
+        print("Updating processing_status check constraint to include 'transcribed'...")
+        cur.execute("ALTER TABLE calls DROP CONSTRAINT IF EXISTS calls_processing_status_check;")
         cur.execute("""
             ALTER TABLE calls ADD CONSTRAINT calls_processing_status_check
-            CHECK (processing_status IN ('new','processing','done','error','skipped'));
+            CHECK (processing_status IN ('new','processing','transcribed','done','error','skipped'));
         """)
 
-        print("Dropping speech_emotions table and column...")
-        cur.execute("DROP TABLE IF EXISTS speech_emotions CASCADE;")
-        cur.execute("ALTER TABLE evaluations DROP COLUMN IF EXISTS speech_emotions;")
-
-        print("Updating processing_stats table...")
-        cur.execute("ALTER TABLE processing_stats DROP COLUMN IF EXISTS emotion_duration;")
-
-        print("Creating processing_stats table...")
+        print("Creating tasks table if not exists...")
         cur.execute("""
-            CREATE TABLE IF NOT EXISTS processing_stats (
-                linkedid        VARCHAR(32) PRIMARY KEY REFERENCES calls(linkedid) ON DELETE CASCADE,
-                asr_duration    REAL,
-                emotion_duration REAL,
-                llm_duration    REAL,
-                total_duration  REAL,
+            CREATE TABLE IF NOT EXISTS tasks (
+                id              SERIAL PRIMARY KEY,
+                prompt_id       INT NOT NULL REFERENCES prompts(id) ON DELETE CASCADE,
+                start_date      DATE NOT NULL,
+                end_date        DATE NOT NULL,
+                analyze_all     BOOLEAN DEFAULT FALSE,
+                asr_status      VARCHAR(20) DEFAULT 'planned' CHECK (asr_status IN ('planned','processing','completed')),
+                llm_status      VARCHAR(20) DEFAULT 'planned' CHECK (llm_status IN ('planned','processing','completed')),
                 created_at      TIMESTAMP DEFAULT now()
             );
         """)
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_stats_created_at ON processing_stats(created_at);")
 
         conn.commit()
         cur.close()

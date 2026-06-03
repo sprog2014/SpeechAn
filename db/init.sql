@@ -3,6 +3,8 @@ CREATE DATABASE call_analysis;
 
 DROP TABLE IF EXISTS processing_stats;
 DROP TABLE IF EXISTS evaluations;
+DROP TABLE IF EXISTS transcripts;
+DROP TABLE IF EXISTS tasks;
 DROP TABLE IF EXISTS calls;
 DROP TABLE IF EXISTS phones;
 DROP TABLE IF EXISTS prompts;
@@ -21,7 +23,7 @@ CREATE TABLE calls (
     incomingtrunk   VARCHAR(80),
     file_path       TEXT NOT NULL,
     processing_status TEXT NOT NULL DEFAULT 'new'
-        CHECK (processing_status IN ('new','processing','done','error','skipped')),
+        CHECK (processing_status IN ('new','processing','transcribed','done','error','skipped')),
     processing_duration REAL,
     created_at      TIMESTAMP DEFAULT now()
 );
@@ -121,3 +123,14 @@ CREATE TABLE processing_stats (
     created_at      TIMESTAMP DEFAULT now()
 );
 CREATE INDEX idx_stats_created_at ON processing_stats(created_at);
+
+CREATE TABLE tasks (
+    id              SERIAL PRIMARY KEY,
+    prompt_id       INT NOT NULL REFERENCES prompts(id) ON DELETE CASCADE,
+    start_date      DATE NOT NULL,
+    end_date        DATE NOT NULL,
+    analyze_all     BOOLEAN DEFAULT FALSE,
+    asr_status      VARCHAR(20) DEFAULT 'planned' CHECK (asr_status IN ('planned','processing','completed')),
+    llm_status      VARCHAR(20) DEFAULT 'planned' CHECK (llm_status IN ('planned','processing','completed')),
+    created_at      TIMESTAMP DEFAULT now()
+);
