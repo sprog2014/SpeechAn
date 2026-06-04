@@ -23,7 +23,7 @@ CREATE TABLE calls (
     incomingtrunk   VARCHAR(80),
     file_path       TEXT NOT NULL,
     processing_status TEXT NOT NULL DEFAULT 'new'
-        CHECK (processing_status IN ('new','processing','transcribed','done','error','skipped','empty')),
+        CHECK (processing_status IN ('new','processing','transcribed','done','error','skipped','empty','stop')),
     processing_duration REAL,
     created_at      TIMESTAMP DEFAULT now()
 );

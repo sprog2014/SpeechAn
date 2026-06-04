@@ -18,10 +18,12 @@ def process_llm(linkedid: str, prompt_id: int, analyze_all: bool = False):
 
     start_time = time.time()
     pg_conn = None
+    old_status = None
 
     try:
         with get_pg_connection() as conn:
             pg_conn = conn
+            old_status = get_call_status(linkedid, conn=pg_conn)
 
             # 1. Check if evaluation already exists
             if check_evaluation_exists(linkedid, prompt_id, conn=pg_conn):
@@ -87,7 +89,8 @@ def process_llm(linkedid: str, prompt_id: int, analyze_all: bool = False):
         logger.exception(f"[{linkedid}] LLM failed: {e}")
         if pg_conn:
             try:
-                set_call_status(linkedid, 'error', conn=pg_conn)
+                new_status = 'stop' if old_status == 'error' else 'error'
+                set_call_status(linkedid, new_status, conn=pg_conn)
             except:
                 pass
         return False

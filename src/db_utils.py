@@ -128,6 +128,19 @@ def get_all_tasks(conn=None):
         with get_pg_connection() as conn:
             return _execute(conn)
 
+def get_call_status(linkedid, conn=None):
+    def _execute(c):
+        cur = c.cursor()
+        cur.execute("SELECT processing_status FROM calls WHERE linkedid = %s", (linkedid,))
+        row = cur.fetchone()
+        return row[0] if row else None
+
+    if conn:
+        return _execute(conn)
+    else:
+        with get_pg_connection() as conn:
+            return _execute(conn)
+
 def add_task(prompt_id, start_date, end_date, analyze_all, conn=None):
     def _execute(c):
         cur = c.cursor()
@@ -224,6 +237,7 @@ def get_processing_statistics(start_date, end_date):
                 COUNT(*) FILTER (WHERE processing_status = 'transcribed') as transcribed,
                 COUNT(*) FILTER (WHERE processing_status = 'error') as error,
                 COUNT(*) FILTER (WHERE processing_status = 'empty') as empty,
+                COUNT(*) FILTER (WHERE processing_status = 'stop') as stop,
                 ROUND(AVG(processing_duration) FILTER (WHERE processing_status = 'done')::numeric, 2) as avg_duration,
                 ROUND(SUM(processing_duration) FILTER (WHERE processing_status = 'done')::numeric, 2) as total_duration
             FROM calls

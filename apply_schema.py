@@ -27,11 +27,11 @@ def apply_schema_updates():
         conn = psycopg2.connect(**PG_CONFIG)
         cur = conn.cursor()
 
-        print("Updating processing_status check constraint to include 'transcribed' and 'empty'...")
+        print("Updating processing_status check constraint to include 'transcribed', 'empty' and 'stop'...")
         cur.execute("ALTER TABLE calls DROP CONSTRAINT IF EXISTS calls_processing_status_check;")
         cur.execute("""
             ALTER TABLE calls ADD CONSTRAINT calls_processing_status_check
-            CHECK (processing_status IN ('new','processing','transcribed','done','error','skipped','empty'));
+            CHECK (processing_status IN ('new','processing','transcribed','done','error','skipped','empty','stop'));
         """)
 
         print("Creating tasks table if not exists...")

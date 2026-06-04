@@ -20,15 +20,34 @@ def get_today_yesterday_calls(prompt_id):
             cur = conn.cursor()
             # Find calls from today/yesterday that are 'transcribed' or 'done' but no evaluation for the default prompt
             # We explicitly exclude 'empty' as there is no transcript to analyze.
+            # We ALSO include yesterday's 'error' if they have a transcript.
             cur.execute("""
-                SELECT c.linkedid
+                SELECT c.linkedid, c.processing_status, c.calldate
                 FROM calls c
                 LEFT JOIN evaluations e ON c.linkedid = e.linkedid AND e.prompt_id = %s
                 WHERE c.calldate >= CURRENT_DATE - INTERVAL '1 day'
-                AND c.processing_status IN ('transcribed', 'done')
+                AND (c.processing_status IN ('transcribed', 'done') OR (c.processing_status = 'error' AND c.calldate::date = CURRENT_DATE - 1))
                 AND e.linkedid IS NULL
             """, (prompt_id,))
-            return [row[0] for row in cur.fetchall()]
+            rows = cur.fetchall()
+
+            candidates = []
+            error_lids = []
+            for lid, status, cdate in rows:
+                if status == 'error':
+                    error_lids.append(lid)
+                else:
+                    candidates.append(lid)
+
+            if error_lids:
+                # Check if these errors have transcripts
+                cur.execute("SELECT linkedid FROM transcripts WHERE linkedid = ANY(%s)", (error_lids,))
+                has_transcript = set(row[0] for row in cur.fetchall())
+                for lid in error_lids:
+                    if lid in has_transcript:
+                        candidates.append(lid)
+
+            return candidates
     except Exception as e:
         logger.error(f"Error fetching today/yesterday calls: {e}")
         return []
