@@ -74,6 +74,14 @@ def process_asr(file_path: str):
             else:
                 combined_segments = transcribe_with_vad(right_waveform, left_waveform, sr)
 
+            if not combined_segments:
+                logger.info(f"[{linkedid}] No speech detected.")
+                set_call_status(linkedid, 'empty', conn=pg_conn)
+                duration = time.time() - start_time
+                from db_utils import insert_processing_stats
+                insert_processing_stats(linkedid, duration, 0, duration, conn=pg_conn)
+                return True
+
             for start, end, channel, text in combined_segments:
                 insert_transcript(linkedid, channel, start, end, text, conn=pg_conn)
 
@@ -86,6 +94,11 @@ def process_asr(file_path: str):
 
     except Exception as e:
         logger.exception(f"[{linkedid}] ASR failed: {e}")
+        if pg_conn:
+            try:
+                set_call_status(linkedid, 'error', conn=pg_conn)
+            except:
+                pass
         return False
 
 if __name__ == "__main__":

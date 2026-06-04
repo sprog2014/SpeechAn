@@ -19,6 +19,7 @@ def get_today_yesterday_calls(prompt_id):
         with get_pg_connection() as conn:
             cur = conn.cursor()
             # Find calls from today/yesterday that are 'transcribed' or 'done' but no evaluation for the default prompt
+            # We explicitly exclude 'empty' as there is no transcript to analyze.
             cur.execute("""
                 SELECT c.linkedid
                 FROM calls c
