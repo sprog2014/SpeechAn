@@ -5,7 +5,7 @@ import torchaudio
 import time
 from db_utils import (
     fetch_call_metadata, upsert_call, insert_transcript, get_pg_connection,
-    check_transcript_exists, set_call_status
+    check_transcript_exists, set_call_status, get_call_status
 )
 from asr import transcribe_with_vad
 from logging_utils import setup_logging
@@ -29,10 +29,12 @@ def process_asr(file_path: str):
 
     start_time = time.time()
     pg_conn = None
+    old_status = None
 
     try:
         with get_pg_connection() as conn:
             pg_conn = conn
+            old_status = get_call_status(linkedid, conn=pg_conn)
 
             # 1. Check if transcript already exists
             if check_transcript_exists(linkedid, conn=pg_conn):
@@ -96,7 +98,8 @@ def process_asr(file_path: str):
         logger.exception(f"[{linkedid}] ASR failed: {e}")
         if pg_conn:
             try:
-                set_call_status(linkedid, 'error', conn=pg_conn)
+                new_status = 'stop' if old_status == 'error' else 'error'
+                set_call_status(linkedid, new_status, conn=pg_conn)
             except:
                 pass
         return False

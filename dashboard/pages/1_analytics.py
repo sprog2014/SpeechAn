@@ -384,7 +384,8 @@ else:
             'skipped': '⏭️',
             'error': '❌',
             'new': '🆕',
-            'empty': '😶'
+            'empty': '😶',
+            'stop': '🛑'
         }
         filtered_df['Статус'] = filtered_df['processing_status'].map(lambda x: status_map.get(x, '❓'))
 

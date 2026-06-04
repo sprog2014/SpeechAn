@@ -20,9 +20,34 @@ def scan_current_files():
             cur = conn.cursor()
             # We skip anything that is already in the 'calls' table with a status that indicates we've seen it.
             # 'new' or 'processing' (from previous runs) might be re-attempted if they are not in processing_now.
-            # But 'transcribed', 'done', 'error', 'skipped', 'empty' should definitely be skipped.
-            cur.execute("SELECT linkedid FROM calls WHERE processing_status IN ('transcribed', 'done', 'error', 'skipped', 'empty', 'processing')")
-            processed = set(row[0] for row in cur.fetchall())
+            # But 'transcribed', 'done', 'error', 'skipped', 'empty', 'stop' should definitely be skipped.
+            # EXCEPT: we retry 'error' if it's from yesterday and doesn't have a transcript.
+            cur.execute("""
+                SELECT linkedid, processing_status, calldate
+                FROM calls
+                WHERE processing_status IN ('transcribed', 'done', 'error', 'skipped', 'empty', 'processing', 'stop')
+            """)
+            rows = cur.fetchall()
+
+            processed = set()
+            yesterday_errors = set()
+            yesterday_start = (datetime.now() - timedelta(days=1)).date()
+
+            for lid, status, cdate in rows:
+                if status == 'error' and cdate.date() == yesterday_start:
+                    yesterday_errors.add(lid)
+                else:
+                    processed.add(lid)
+
+            # Now we need to know which of yesterday's errors already have a transcript
+            # because if they have one, they should be retried by LLM dispatcher, not ASR.
+            if yesterday_errors:
+                cur.execute("SELECT linkedid FROM transcripts WHERE linkedid = ANY(%s)", (list(yesterday_errors),))
+                has_transcript = set(row[0] for row in cur.fetchall())
+                for lid in yesterday_errors:
+                    if lid in has_transcript:
+                        processed.add(lid)
+
     except Exception as e:
         logger.error(f"Error scanning DB: {e}")
         return []
@@ -53,7 +78,7 @@ def get_task_files(task):
     try:
         with get_pg_connection() as conn:
             cur = conn.cursor()
-            cur.execute("SELECT linkedid FROM calls WHERE processing_status IN ('transcribed', 'done', 'error', 'skipped', 'empty', 'processing')")
+            cur.execute("SELECT linkedid FROM calls WHERE processing_status IN ('transcribed', 'done', 'error', 'skipped', 'empty', 'processing', 'stop')")
             processed = set(row[0] for row in cur.fetchall())
     except Exception as e:
         logger.error(f"Error scanning DB for task: {e}")
