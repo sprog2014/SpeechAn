@@ -5,7 +5,8 @@ from db_utils import (
     get_pg_connection, get_prompt_by_id, check_evaluation_exists,
     insert_evaluation, set_call_done, set_call_error, set_processing_duration,
     insert_processing_stats, check_phone_usage, get_system_setting,
-    is_phone_registered, set_call_status, format_dialogue, get_call_transcript
+    is_phone_registered, set_call_status, format_dialogue, get_call_transcript,
+    get_call_status
 )
 from llm_analysis import analyze_transcript
 from logging_utils import setup_logging
