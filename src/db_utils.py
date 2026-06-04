@@ -223,6 +223,7 @@ def get_processing_statistics(start_date, end_date):
                 COUNT(*) FILTER (WHERE processing_status = 'processing') as in_progress,
                 COUNT(*) FILTER (WHERE processing_status = 'transcribed') as transcribed,
                 COUNT(*) FILTER (WHERE processing_status = 'error') as error,
+                COUNT(*) FILTER (WHERE processing_status = 'empty') as empty,
                 ROUND(AVG(processing_duration) FILTER (WHERE processing_status = 'done')::numeric, 2) as avg_duration,
                 ROUND(SUM(processing_duration) FILTER (WHERE processing_status = 'done')::numeric, 2) as total_duration
             FROM calls

@@ -55,7 +55,8 @@ def process_llm(linkedid: str, prompt_id: int, analyze_all: bool = False):
             transcript_rows = get_call_transcript(linkedid, conn=pg_conn)
             if not transcript_rows:
                 logger.warning(f"[{linkedid}] No transcript found")
-                return False
+                # We don't change status here as per requirements, but we return True to indicate we're done with this attempt
+                return True
 
             full_dialogue = format_dialogue(transcript_rows)
             if not full_dialogue.strip():
@@ -84,6 +85,11 @@ def process_llm(linkedid: str, prompt_id: int, analyze_all: bool = False):
 
     except Exception as e:
         logger.exception(f"[{linkedid}] LLM failed: {e}")
+        if pg_conn:
+            try:
+                set_call_status(linkedid, 'error', conn=pg_conn)
+            except:
+                pass
         return False
 
 if __name__ == "__main__":

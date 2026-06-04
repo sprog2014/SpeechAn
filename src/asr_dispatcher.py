@@ -18,11 +18,11 @@ def scan_current_files():
     try:
         with get_pg_connection() as conn:
             cur = conn.cursor()
-            cur.execute("SELECT linkedid FROM transcripts")
+            # We skip anything that is already in the 'calls' table with a status that indicates we've seen it.
+            # 'new' or 'processing' (from previous runs) might be re-attempted if they are not in processing_now.
+            # But 'transcribed', 'done', 'error', 'skipped', 'empty' should definitely be skipped.
+            cur.execute("SELECT linkedid FROM calls WHERE processing_status IN ('transcribed', 'done', 'error', 'skipped', 'empty', 'processing')")
             processed = set(row[0] for row in cur.fetchall())
-
-            cur.execute("SELECT linkedid FROM calls WHERE processing_status = 'error'")
-            errors = set(row[0] for row in cur.fetchall())
     except Exception as e:
         logger.error(f"Error scanning DB: {e}")
         return []
@@ -40,7 +40,7 @@ def scan_current_files():
                 if f.lower().endswith('.mp3'):
                     f_path = os.path.join(root, f)
                     linkedid = os.path.splitext(f)[0]
-                    if linkedid not in processed and linkedid not in processing_now and linkedid not in errors:
+                    if linkedid not in processed and linkedid not in processing_now:
                         if current_time - os.path.getmtime(f_path) > 60:
                             files_to_process.append(f_path)
     return files_to_process
@@ -53,7 +53,7 @@ def get_task_files(task):
     try:
         with get_pg_connection() as conn:
             cur = conn.cursor()
-            cur.execute("SELECT linkedid FROM transcripts")
+            cur.execute("SELECT linkedid FROM calls WHERE processing_status IN ('transcribed', 'done', 'error', 'skipped', 'empty', 'processing')")
             processed = set(row[0] for row in cur.fetchall())
     except Exception as e:
         logger.error(f"Error scanning DB for task: {e}")
