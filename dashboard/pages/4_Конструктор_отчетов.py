@@ -358,13 +358,13 @@ else:
         labels_map = {'value': agg_type, x_axis: format_col_name(settings["agg_col"])}
         chart_type = settings["chart_type"]
         if chart_type == "bar":
-            fig = px.bar(res_df, x=x_axis, y='value', text='value', labels=labels_map)
+            fig = px.bar(res_df, x=x_axis, y='value', text='value', labels=labels_map, custom_data=[x_axis])
         elif chart_type == "line":
-            fig = px.line(res_df, x=x_axis, y='value', markers=True, labels=labels_map)
+            fig = px.line(res_df, x=x_axis, y='value', markers=True, labels=labels_map, custom_data=[x_axis])
         elif chart_type == "pie":
-            fig = px.pie(res_df, names=x_axis, values='value', labels=labels_map)
+            fig = px.pie(res_df, names=x_axis, values='value', labels=labels_map, custom_data=[x_axis])
         elif chart_type == "area":
-            fig = px.area(res_df, x=x_axis, y='value', labels=labels_map)
+            fig = px.area(res_df, x=x_axis, y='value', labels=labels_map, custom_data=[x_axis])
 
         st.subheader(f"Отчет: {agg_type} по {format_col_name(settings['agg_col'])}")
         selected_points = st.plotly_chart(fig, width="stretch", on_select="rerun", key="report_chart")
@@ -372,10 +372,17 @@ else:
         filtered_selection = df.copy()
         if selected_points and selected_points.selection.get("points"):
             point = selected_points.selection["points"][0]
-            val = point.get("x") or point.get("label")
+            # Пытаемся получить значение из разных возможных ключей в зависимости от типа графика
+            val = point.get("x")
+            if val is None:
+                val = point.get("label")
+            if val is None:
+                val = point.get("customdata", [None])[0]
+
             if val is not None:
                 if settings["time_toggle"]:
                     if settings["time_res"] == "День":
+                        # Приводим к строке для сравнения
                         filtered_selection = filtered_selection[filtered_selection['calldate'].dt.date.astype(str) == str(val)]
                     else:
                         filtered_selection = filtered_selection[filtered_selection['calldate'].dt.strftime('%Y-%m-%d %H:00') == str(val)]
@@ -406,8 +413,9 @@ else:
 
         if event and event.selection.rows:
             idx = event.selection.rows[0]
-            selected_row = display_df.iloc[idx]
-            linkedid = selected_row['linkedid']
+            if idx < len(display_df):
+                selected_row = display_df.iloc[idx]
+                linkedid = selected_row['linkedid']
 
             st.markdown("---")
             st.subheader(f"Детали звонка: {linkedid}")
