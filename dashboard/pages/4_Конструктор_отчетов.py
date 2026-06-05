@@ -86,6 +86,8 @@ if "report_filters" not in st.session_state:
     st.session_state.report_filters = []
 if "last_prompt_id" not in st.session_state:
     st.session_state.last_prompt_id = None
+if "applied_settings" not in st.session_state:
+    st.session_state.applied_settings = None
 
 # --- Боковая панель (Настройки отчета) ---
 with st.sidebar:
@@ -121,6 +123,37 @@ with st.sidebar:
         st.session_state.report_filters = []
         st.session_state.last_prompt_id = selected_prompt_id
 
+    # Загружаем данные для получения ключей JSON и уникальных значений
+    df_for_metadata = get_data(start_date, end_date, selected_prompt_id)
+    phone_names = get_phone_names()
+
+    def process_metadata_df(df_m):
+        if df_m.empty: return df_m
+        def _row(row):
+            if row['direction'] == 'incoming':
+                op_num = row['answeredext']
+                cl_num = row['src']
+            else:
+                op_num = row['src']
+                cl_num = row['answeredext']
+            row['operator_name'] = phone_names.get(op_num, op_num)
+            row['client_number'] = cl_num
+            return row
+        df_m = df_m.apply(_row, axis=1)
+
+        # Распаковка JSON
+        sample = get_sample_record(selected_prompt_id)
+        if sample:
+            checklist = sample[0] if isinstance(sample[0], dict) else {}
+            metrics = sample[1] if isinstance(sample[1], dict) else {}
+            for k in checklist.keys():
+                df_m[f"checklist.{k}"] = df_m["checklist_json"].apply(lambda x: x.get(k) if isinstance(x, dict) else None)
+            for k in metrics.keys():
+                df_m[f"metrics.{k}"] = df_m["metrics_json"].apply(lambda x: x.get(k) if isinstance(x, dict) else None)
+        return df_m
+
+    df_for_metadata = process_metadata_df(df_for_metadata)
+
     # Получаем ключи JSON
     sample = get_sample_record(selected_prompt_id)
     json_keys = []
@@ -139,7 +172,7 @@ with st.sidebar:
 
     st.subheader("Фильтры")
     if st.button("Добавить фильтр"):
-        st.session_state.report_filters.append({"column": all_available_columns[0], "op": "равно", "value": ""})
+        st.session_state.report_filters.append({"column": all_available_columns[0], "op": "равно", "value": "", "not": False})
 
     for i, f in enumerate(st.session_state.report_filters):
         with st.expander(f"Фильтр {i+1}: {format_col_name(f['column'])}"):
@@ -148,11 +181,30 @@ with st.sidebar:
                                       format_func=format_col_name,
                                       key=f"col_{i}")
 
-            ops = ["равно", "не равно", "больше", "меньше", "содержит", "не содержит", "начинается с", "заполнено", "не заполнено"]
-            f['op'] = st.selectbox(f"Операция", ops, index=ops.index(f['op']) if f['op'] in ops else 0, key=f"op_{i}")
+            c1, c2 = st.columns([1, 4])
+            with c1:
+                f['not'] = st.checkbox("НЕ", value=f.get('not', False), key=f"not_{i}")
+            with c2:
+                ops = ["равно", "больше", "меньше", "содержит", "начинается с", "заполнено", "не заполнено"]
+                f['op'] = st.selectbox(f"Операция", ops, index=ops.index(f['op']) if f['op'] in ops else 0, key=f"op_{i}")
 
             if f['op'] not in ["заполнено", "не заполнено"]:
-                f['value'] = st.text_input(f"Значение", value=f['value'], key=f"val_{i}")
+                # Если "равно", предлагаем выбор из списка
+                if f['op'] == "равно":
+                    unique_vals = []
+                    if not df_for_metadata.empty and f['column'] in df_for_metadata.columns:
+                        unique_vals = sorted([str(x) for x in df_for_metadata[f['column']].unique() if x is not None])
+
+                    if unique_vals:
+                        # Если текущее значение не в списке, добавляем его или сбрасываем
+                        current_val = str(f['value'])
+                        if current_val not in unique_vals:
+                            unique_vals = [current_val] + unique_vals
+                        f['value'] = st.selectbox(f"Значение", unique_vals, index=unique_vals.index(current_val), key=f"val_{i}")
+                    else:
+                        f['value'] = st.text_input(f"Значение", value=f['value'], key=f"val_{i}")
+                else:
+                    f['value'] = st.text_input(f"Значение", value=f['value'], key=f"val_{i}")
 
             if st.button(f"Удалить", key=f"del_{i}"):
                 st.session_state.report_filters.pop(i)
@@ -160,7 +212,7 @@ with st.sidebar:
 
     st.subheader("Визуализация")
     agg_col = st.selectbox("Группировка (X-ось)", all_available_columns,
-                           index=all_available_columns.index("call_purpose"),
+                           index=all_available_columns.index("call_purpose") if "call_purpose" in all_available_columns else 0,
                            format_func=format_col_name)
     agg_type = st.selectbox("Тип агрегации (Y-ось)", ["Количество", "Сумма", "Среднее", "Процент"])
 
@@ -183,8 +235,29 @@ with st.sidebar:
     if time_toggle:
         time_res = st.radio("Детализация", ["День", "Час"])
 
-# --- Загрузка и обработка данных ---
-df_raw = get_data(start_date, end_date, selected_prompt_id)
+    if st.button("Применить", type="primary", use_container_width=True):
+        st.session_state.applied_settings = {
+            "start_date": start_date,
+            "end_date": end_date,
+            "prompt_id": selected_prompt_id,
+            "filters": [f.copy() for f in st.session_state.report_filters],
+            "agg_col": agg_col,
+            "agg_type": agg_type,
+            "y_axis_col": y_axis_col,
+            "chart_type": chart_type,
+            "time_toggle": time_toggle,
+            "time_res": time_res,
+            "json_keys": json_keys
+        }
+
+# --- Основная область ---
+if st.session_state.applied_settings is None:
+    st.info("Настройте параметры в боковой панели и нажмите 'Применить'.")
+    st.stop()
+
+settings = st.session_state.applied_settings
+
+df_raw = get_data(settings["start_date"], settings["end_date"], settings["prompt_id"])
 
 if df_raw.empty:
     st.info("Данные не найдены для выбранных параметров.")
@@ -207,43 +280,43 @@ else:
     df = df.apply(process_row_basic, axis=1)
 
     # Распаковка JSON
-    for jk in json_keys:
+    for jk in settings["json_keys"]:
         prefix, key = jk.split('.')
         col_name = f"{prefix}_json"
         df[jk] = df[col_name].apply(lambda x: x.get(key) if isinstance(x, dict) else None)
 
     # Применение фильтров
-    for f in st.session_state.report_filters:
+    for f in settings["filters"]:
         col = f['column']
         op = f['op']
         val = f['value']
+        is_not = f.get('not', False)
+
+        mask = pd.Series(True, index=df.index)
 
         if op == "равно":
             try:
                 v = float(val)
-                df = df[df[col] == v]
+                mask = (df[col] == v)
             except:
-                df = df[df[col].astype(str) == str(val)]
-        elif op == "не равно":
-            try:
-                v = float(val)
-                df = df[df[col] != v]
-            except:
-                df = df[df[col].astype(str) != str(val)]
+                mask = (df[col].astype(str) == str(val))
         elif op == "больше":
-            df = df[pd.to_numeric(df[col], errors='coerce') > float(val)]
+            mask = (pd.to_numeric(df[col], errors='coerce') > float(val))
         elif op == "меньше":
-            df = df[pd.to_numeric(df[col], errors='coerce') < float(val)]
+            mask = (pd.to_numeric(df[col], errors='coerce') < float(val))
         elif op == "содержит":
-            df = df[df[col].astype(str).str.contains(str(val), case=False, na=False)]
-        elif op == "не содержит":
-            df = df[~df[col].astype(str).str.contains(str(val), case=False, na=False)]
+            mask = (df[col].astype(str).str.contains(str(val), case=False, na=False))
         elif op == "начинается с":
-            df = df[df[col].astype(str).str.startswith(str(val), na=False)]
+            mask = (df[col].astype(str).str.startswith(str(val), na=False))
         elif op == "заполнено":
-            df = df[df[col].notnull()]
+            mask = (df[col].notnull())
         elif op == "не заполнено":
-            df = df[df[col].isnull()]
+            mask = (df[col].isnull())
+
+        if is_not:
+            df = df[~mask]
+        else:
+            df = df[mask]
 
     if df.empty:
         st.warning("После применения фильтров данных не осталось.")
@@ -251,15 +324,18 @@ else:
         # Подготовка данных для графика
         plot_df = df.copy()
 
-        x_axis = agg_col
-        if time_toggle:
-            if time_res == "День":
+        x_axis = settings["agg_col"]
+        if settings["time_toggle"]:
+            if settings["time_res"] == "День":
                 plot_df['time_axis'] = plot_df['calldate'].dt.date
             else:
                 plot_df['time_axis'] = plot_df['calldate'].dt.strftime('%Y-%m-%d %H:00')
             x_axis = 'time_axis'
 
         # Агрегация
+        agg_type = settings["agg_type"]
+        y_axis_col = settings["y_axis_col"]
+
         if agg_type == "Количество":
             res_df = plot_df.groupby(x_axis, observed=False).size().reset_index(name='value')
         elif agg_type == "Сумма":
@@ -279,7 +355,8 @@ else:
 
         # Отрисовка графика
         fig = None
-        labels_map = {'value': agg_type, x_axis: format_col_name(agg_col)}
+        labels_map = {'value': agg_type, x_axis: format_col_name(settings["agg_col"])}
+        chart_type = settings["chart_type"]
         if chart_type == "bar":
             fig = px.bar(res_df, x=x_axis, y='value', text='value', labels=labels_map)
         elif chart_type == "line":
@@ -289,7 +366,7 @@ else:
         elif chart_type == "area":
             fig = px.area(res_df, x=x_axis, y='value', labels=labels_map)
 
-        st.subheader(f"Отчет: {agg_type} по {format_col_name(agg_col)}")
+        st.subheader(f"Отчет: {agg_type} по {format_col_name(settings['agg_col'])}")
         selected_points = st.plotly_chart(fig, use_container_width=True, on_select="rerun", key="report_chart")
 
         filtered_selection = df.copy()
@@ -297,13 +374,13 @@ else:
             point = selected_points.selection["points"][0]
             val = point.get("x") or point.get("label")
             if val is not None:
-                if time_toggle:
-                    if time_res == "День":
+                if settings["time_toggle"]:
+                    if settings["time_res"] == "День":
                         filtered_selection = filtered_selection[filtered_selection['calldate'].dt.date.astype(str) == str(val)]
                     else:
                         filtered_selection = filtered_selection[filtered_selection['calldate'].dt.strftime('%Y-%m-%d %H:00') == str(val)]
                 else:
-                    filtered_selection = filtered_selection[filtered_selection[agg_col].astype(str) == str(val)]
+                    filtered_selection = filtered_selection[filtered_selection[settings["agg_col"]].astype(str) == str(val)]
 
         # --- Детализация ---
         st.markdown("---")
