@@ -235,7 +235,7 @@ with st.sidebar:
     if time_toggle:
         time_res = st.radio("Детализация", ["День", "Час"])
 
-    if st.button("Применить", type="primary", use_container_width=True):
+    if st.button("Применить", type="primary", width="stretch"):
         st.session_state.applied_settings = {
             "start_date": start_date,
             "end_date": end_date,
@@ -367,7 +367,7 @@ else:
             fig = px.area(res_df, x=x_axis, y='value', labels=labels_map)
 
         st.subheader(f"Отчет: {agg_type} по {format_col_name(settings['agg_col'])}")
-        selected_points = st.plotly_chart(fig, use_container_width=True, on_select="rerun", key="report_chart")
+        selected_points = st.plotly_chart(fig, width="stretch", on_select="rerun", key="report_chart")
 
         filtered_selection = df.copy()
         if selected_points and selected_points.selection.get("points"):
