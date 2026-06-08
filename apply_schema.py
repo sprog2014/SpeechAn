@@ -58,6 +58,10 @@ def apply_schema_updates():
             );
         """)
 
+        print("Creating JSONB GIN indexes if they do not exist...")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_evals_checklist_gin ON evaluations USING GIN (checklist_json);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_evals_metrics_gin ON evaluations USING GIN (metrics_json);")
+
         conn.commit()
         cur.close()
         conn.close()

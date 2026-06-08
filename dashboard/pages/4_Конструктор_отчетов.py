@@ -26,33 +26,147 @@ def get_engine():
     return create_engine(db_url)
 
 @st.cache_data(ttl=60)
-def get_data(start_date, end_date, prompt_id):
+def get_report_data(start_date, end_date, prompt_id, filters, agg_col, agg_type, y_axis_col, time_toggle, time_res):
     engine = get_engine()
+
+    # 1. Формируем WHERE
+    where_clauses = ["e.prompt_id = :pid", "c.calldate >= :start", "c.calldate < :end"]
+    params = {
+        "pid": prompt_id,
+        "start": start_date,
+        "end": end_date + timedelta(days=1)
+    }
+
+    def get_sql_col(col):
+        if col.startswith("checklist."):
+            return f"e.checklist_json->>'{col.split('.')[1]}'"
+        if col.startswith("metrics."):
+            return f"e.metrics_json->>'{col.split('.')[1]}'"
+        if col == "operator_name":
+            return "COALESCE(p.name, CASE WHEN c.direction = 'incoming' THEN c.answeredext ELSE c.src END)"
+        if col == "client_number":
+            return "CASE WHEN c.direction = 'incoming' THEN c.src ELSE c.answeredext END"
+        return f"c.{col}" if col in ["calldate", "direction", "duration", "billsec"] else f"e.{col}"
+
+    for i, f in enumerate(filters):
+        col_sql = get_sql_col(f['column'])
+        op = f['op']
+        val = f['value']
+        is_not = f.get('not', False)
+
+        p_name = f"v_{i}"
+        clause = ""
+
+        if op == "заполнено":
+            clause = f"{col_sql} IS NOT NULL"
+        elif op == "не заполнено":
+            clause = f"{col_sql} IS NULL"
+        elif op == "равно":
+            if isinstance(val, list):
+                if not val: continue
+                clause = f"{col_sql} IN :v_{i}"
+                params[p_name] = tuple(val)
+            else:
+                clause = f"{col_sql} = :v_{i}"
+                params[p_name] = val
+        elif op == "больше":
+            clause = f"({col_sql})::numeric > :v_{i}"
+            params[p_name] = float(val)
+        elif op == "меньше":
+            clause = f"({col_sql})::numeric < :v_{i}"
+            params[p_name] = float(val)
+        elif op == "содержит":
+            clause = f"{col_sql} ILIKE :v_{i}"
+            params[p_name] = f"%{val}%"
+        elif op == "начинается с":
+            clause = f"{col_sql} ILIKE :v_{i}"
+            params[p_name] = f"{val}%"
+
+        if clause:
+            if is_not:
+                where_clauses.append(f"NOT ({clause})")
+            else:
+                where_clauses.append(clause)
+
+    where_str = " AND ".join(where_clauses)
+
+    # 2. Формируем проекцию X-оси
+    x_sql = get_sql_col(agg_col)
+    if time_toggle:
+        if time_res == "День":
+            x_sql = "DATE(c.calldate)"
+        else:
+            x_sql = "TO_CHAR(c.calldate, 'YYYY-MM-DD HH24:00')"
+
+    # 3. Формируем запрос для графиков (Агрегация на стороне БД)
+    y_sql = "*"
+    if agg_type == "Количество":
+        y_sql = "COUNT(*)"
+    elif agg_type == "Сумма":
+        y_sql = f"SUM(({get_sql_col(y_axis_col)})::numeric)"
+    elif agg_type == "Среднее":
+        y_sql = f"ROUND(AVG(({get_sql_col(y_axis_col)})::numeric), 2)"
+    elif agg_type == "Процент":
+        y_sql = "COUNT(*)" # Процент посчитаем в пандасе из долей
+
+    query_agg = f"""
+        SELECT {x_sql} as x_val, {y_sql} as y_val
+        FROM calls c
+        JOIN evaluations e ON c.linkedid = e.linkedid
+        LEFT JOIN phones p ON p.number = (CASE WHEN c.direction = 'incoming' THEN c.answeredext ELSE c.src END)
+        WHERE {where_str}
+        GROUP BY 1
+        ORDER BY 1
+    """
+
+    # 4. Запрос для детализации (Лимит 1000 для скорости)
+    query_details = f"""
+        SELECT
+            c.calldate, c.direction,
+            CASE WHEN c.direction = 'incoming' THEN c.src ELSE c.answeredext END as client_number,
+            COALESCE(p.name, CASE WHEN c.direction = 'incoming' THEN c.answeredext ELSE c.src END) as operator_name,
+            c.duration, e.call_purpose, e.politeness_score, c.linkedid,
+            {x_sql} as x_val
+        FROM calls c
+        JOIN evaluations e ON c.linkedid = e.linkedid
+        LEFT JOIN phones p ON p.number = (CASE WHEN c.direction = 'incoming' THEN c.answeredext ELSE c.src END)
+        WHERE {where_str}
+        ORDER BY c.calldate DESC
+        LIMIT 1000
+    """
+
     with engine.connect() as conn:
-        df = pd.read_sql(text("""
-            SELECT
-                c.linkedid, c.calldate, c.src, c.answeredext, c.direction,
-                c.duration, c.billsec,
-                e.politeness_score, e.client_sentiment, e.call_purpose,
-                e.checklist_json, e.metrics_json
-            FROM calls c
-            JOIN evaluations e ON c.linkedid = e.linkedid
-            WHERE e.prompt_id = :pid
-              AND c.calldate >= :start
-              AND c.calldate < :end
-        """), conn, params={
-            "pid": prompt_id,
-            "start": start_date,
-            "end": end_date + timedelta(days=1)
-        })
-    return df
+        df_agg = pd.read_sql(text(query_agg), conn, params=params)
+        df_details = pd.read_sql(text(query_details), conn, params=params)
+
+    return df_agg, df_details
 
 @st.cache_data(ttl=300)
-def get_phone_names():
+def get_distinct_values(prompt_id, column):
     engine = get_engine()
+    col_sql = column
+    if column.startswith("checklist."):
+        col_sql = f"checklist_json->>'{column.split('.')[1]}'"
+    elif column.startswith("metrics."):
+        col_sql = f"metrics_json->>'{column.split('.')[1]}'"
+    elif column == "operator_name":
+        col_sql = "COALESCE(p.name, CASE WHEN c.direction = 'incoming' THEN c.answeredext ELSE c.src END)"
+    elif column == "client_number":
+        col_sql = "CASE WHEN c.direction = 'incoming' THEN c.src ELSE c.answeredext END"
+    else:
+        col_sql = f"c.{column}" if column in ["direction"] else f"e.{column}"
+
+    query = f"""
+        SELECT DISTINCT {col_sql} as val
+        FROM calls c
+        JOIN evaluations e ON c.linkedid = e.linkedid
+        LEFT JOIN phones p ON p.number = (CASE WHEN c.direction = 'incoming' THEN c.answeredext ELSE c.src END)
+        WHERE e.prompt_id = :pid AND {col_sql} IS NOT NULL
+        ORDER BY 1
+    """
     with engine.connect() as conn:
-        df_phones = pd.read_sql(text("SELECT number, name FROM phones"), conn)
-    return dict(zip(df_phones['number'], df_phones['name']))
+        df = pd.read_sql(text(query), conn, params={"pid": prompt_id})
+    return sorted([str(x) for x in df['val'].tolist()])
 
 def get_sample_record(prompt_id):
     engine = get_engine()
@@ -128,12 +242,9 @@ with st.sidebar:
 
     if selected_report_name != "-- Новый отчет --":
         if st.session_state.active_report_name != selected_report_name:
-            # Загружаем настройки
             report_data = saved_reports[saved_reports['name'] == selected_report_name].iloc[0]
             s = report_data['settings']
-            if isinstance(s, str):
-                s = json.loads(s)
-
+            if isinstance(s, str): s = json.loads(s)
             st.session_state.report_filters = s.get('filters', [])
             st.session_state.last_prompt_id = s.get('prompt_id')
             st.session_state.viz_settings = {
@@ -159,7 +270,7 @@ with st.sidebar:
     # 2. Выбор промпта
     all_prompts = get_all_prompts()
     if not all_prompts:
-        st.warning("Промпты не найдены. Создайте промпт в настройках.")
+        st.warning("Промпты не найдены.")
         st.stop()
 
     prompt_options = {p['id']: p['name'] for p in all_prompts}
@@ -177,37 +288,6 @@ with st.sidebar:
         st.session_state.report_filters = []
         st.session_state.last_prompt_id = selected_prompt_id
 
-    # Загружаем данные для получения ключей JSON и уникальных значений
-    df_for_metadata = get_data(start_date, end_date, selected_prompt_id)
-    phone_names = get_phone_names()
-
-    def process_metadata_df(df_m):
-        if df_m.empty: return df_m
-        def _row(row):
-            if row['direction'] == 'incoming':
-                op_num = row['answeredext']
-                cl_num = row['src']
-            else:
-                op_num = row['src']
-                cl_num = row['answeredext']
-            row['operator_name'] = phone_names.get(op_num, op_num)
-            row['client_number'] = cl_num
-            return row
-        df_m = df_m.apply(_row, axis=1)
-
-        # Распаковка JSON
-        sample = get_sample_record(selected_prompt_id)
-        if sample:
-            checklist = sample[0] if isinstance(sample[0], dict) else {}
-            metrics = sample[1] if isinstance(sample[1], dict) else {}
-            for k in checklist.keys():
-                df_m[f"checklist.{k}"] = df_m["checklist_json"].apply(lambda x: x.get(k) if isinstance(x, dict) else None)
-            for k in metrics.keys():
-                df_m[f"metrics.{k}"] = df_m["metrics_json"].apply(lambda x: x.get(k) if isinstance(x, dict) else None)
-        return df_m
-
-    df_for_metadata = process_metadata_df(df_for_metadata)
-
     # Получаем ключи JSON
     sample = get_sample_record(selected_prompt_id)
     json_keys = []
@@ -216,12 +296,7 @@ with st.sidebar:
         metrics = sample[1] if isinstance(sample[1], dict) else {}
         json_keys = [f"checklist.{k}" for k in checklist.keys()] + [f"metrics.{k}" for k in metrics.keys()]
 
-    # Список доступных полей
-    base_columns = [
-        "calldate", "direction", "duration", "billsec",
-        "politeness_score", "client_sentiment", "call_purpose",
-        "operator_name", "client_number"
-    ]
+    base_columns = ["direction", "duration", "billsec", "politeness_score", "client_sentiment", "call_purpose", "operator_name", "client_number"]
     all_available_columns = base_columns + json_keys
 
     st.subheader("Фильтры")
@@ -232,8 +307,7 @@ with st.sidebar:
         with st.expander(f"Фильтр {i+1}: {format_col_name(f['column'])}"):
             f['column'] = st.selectbox(f"Поле", all_available_columns,
                                       index=all_available_columns.index(f['column']) if f['column'] in all_available_columns else 0,
-                                      format_func=format_col_name,
-                                      key=f"col_{i}")
+                                      format_func=format_col_name, key=f"col_{i}")
 
             c1, c2 = st.columns([1, 4])
             with c1:
@@ -243,23 +317,13 @@ with st.sidebar:
                 f['op'] = st.selectbox(f"Операция", ops, index=ops.index(f['op']) if f['op'] in ops else 0, key=f"op_{i}")
 
             if f['op'] not in ["заполнено", "не заполнено"]:
-                # Если "равно", предлагаем выбор из списка (мультиселект)
                 if f['op'] == "равно":
-                    unique_vals = []
-                    if not df_for_metadata.empty and f['column'] in df_for_metadata.columns:
-                        unique_vals = sorted([str(x) for x in df_for_metadata[f['column']].unique() if x is not None])
-
+                    unique_vals = get_distinct_values(selected_prompt_id, f['column'])
                     if unique_vals:
-                        # Если текущее значение (строка или список) содержит элементы не из списка, добавляем их
-                        if isinstance(f['value'], list):
-                            current_vals = [str(v) for v in f['value']]
-                        else:
-                            current_vals = [str(f['value'])] if f['value'] else []
-
+                        if isinstance(f['value'], list): current_vals = [str(v) for v in f['value']]
+                        else: current_vals = [str(f['value'])] if f['value'] else []
                         for v in current_vals:
-                            if v not in unique_vals:
-                                unique_vals = [v] + unique_vals
-
+                            if v not in unique_vals: unique_vals = [v] + unique_vals
                         f['value'] = st.multiselect(f"Значение", unique_vals, default=current_vals, key=f"val_{i}")
                     else:
                         f['value'] = st.text_input(f"Значение", value=f['value'], key=f"val_{i}")
@@ -271,7 +335,6 @@ with st.sidebar:
                 st.rerun()
 
     st.subheader("Визуализация")
-
     saved_agg_col = st.session_state.viz_settings.get("agg_col")
     agg_col = st.selectbox("Группировка (X-ось)", all_available_columns,
                            index=all_available_columns.index(saved_agg_col) if saved_agg_col in all_available_columns else (all_available_columns.index("call_purpose") if "call_purpose" in all_available_columns else 0),
@@ -279,8 +342,7 @@ with st.sidebar:
 
     agg_types = ["Количество", "Сумма", "Среднее", "Процент"]
     saved_agg_type = st.session_state.viz_settings.get("agg_type")
-    agg_type = st.selectbox("Тип агрегации (Y-ось)", agg_types,
-                            index=agg_types.index(saved_agg_type) if saved_agg_type in agg_types else 0)
+    agg_type = st.selectbox("Тип агрегации (Y-ось)", agg_types, index=agg_types.index(saved_agg_type) if saved_agg_type in agg_types else 0)
 
     y_axis_col = None
     if agg_type in ["Сумма", "Среднее"]:
@@ -290,49 +352,31 @@ with st.sidebar:
                                   index=y_axis_options.index(saved_y_axis) if saved_y_axis in y_axis_options else 0,
                                   format_func=format_col_name)
 
-    chart_type_map = {
-        "Столбчатая": "bar",
-        "Линейная": "line",
-        "Круговая": "pie",
-        "Область": "area"
-    }
+    chart_type_map = {"Столбчатая": "bar", "Линейная": "line", "Круговая": "pie", "Область": "area"}
     saved_chart_type = st.session_state.viz_settings.get("chart_type")
-    # Инвертируем мапу для поиска лейбла по значению
     inv_chart_map = {v: k for k, v in chart_type_map.items()}
     default_chart_label = inv_chart_map.get(saved_chart_type, "Столбчатая")
-
-    selected_chart_label = st.selectbox("Тип диаграммы", list(chart_type_map.keys()),
-                                        index=list(chart_type_map.keys()).index(default_chart_label))
+    selected_chart_label = st.selectbox("Тип диаграммы", list(chart_type_map.keys()), index=list(chart_type_map.keys()).index(default_chart_label))
     chart_type = chart_type_map[selected_chart_label]
 
-    time_toggle = st.checkbox("Ось времени (Дни/Часы)", value=st.session_state.viz_settings.get("time_toggle", False))
+    time_toggle = st.checkbox("Ось времени", value=st.session_state.viz_settings.get("time_toggle", False))
     time_res_options = ["День", "Час"]
     saved_time_res = st.session_state.viz_settings.get("time_res")
-    time_res = st.radio("Детализация", time_res_options,
-                        index=time_res_options.index(saved_time_res) if saved_time_res in time_res_options else 0)
+    time_res = st.radio("Детализация", time_res_options, index=time_res_options.index(saved_time_res) if saved_time_res in time_res_options else 0)
 
     st.markdown("---")
     if st.button("Применить", type="primary", width="stretch"):
         st.session_state.applied_settings = {
-            "start_date": start_date,
-            "end_date": end_date,
-            "prompt_id": selected_prompt_id,
+            "start_date": start_date, "end_date": end_date, "prompt_id": selected_prompt_id,
             "filters": [f.copy() for f in st.session_state.report_filters],
-            "agg_col": agg_col,
-            "agg_type": agg_type,
-            "y_axis_col": y_axis_col,
-            "chart_type": chart_type,
-            "time_toggle": time_toggle,
-            "time_res": time_res,
-            "json_keys": json_keys,
+            "agg_col": agg_col, "agg_type": agg_type, "y_axis_col": y_axis_col,
+            "chart_type": chart_type, "time_toggle": time_toggle, "time_res": time_res,
             "report_name": st.session_state.active_report_name
         }
 
-    # Кнопки сохранения
     col_save, col_del = st.columns(2)
     with col_save:
-        if st.button("Сохранить"):
-            st.session_state.show_save_dialog = True
+        if st.button("Сохранить"): st.session_state.show_save_dialog = True
     with col_del:
         if st.session_state.active_report_name and st.button("Удалить"):
             rep_id = saved_reports[saved_reports['name'] == st.session_state.active_report_name].iloc[0]['id']
@@ -344,17 +388,11 @@ with st.sidebar:
         with st.form("save_report_form"):
             new_name = st.text_input("Имя отчета", value=st.session_state.active_report_name or "")
             if st.form_submit_button("Подтвердить"):
-                current_settings = {
-                    "prompt_id": selected_prompt_id,
-                    "filters": st.session_state.report_filters,
-                    "agg_col": agg_col,
-                    "agg_type": agg_type,
-                    "y_axis_col": y_axis_col,
-                    "chart_type": chart_type,
-                    "time_toggle": time_toggle,
-                    "time_res": time_res
-                }
-                save_report(new_name, current_settings)
+                save_report(new_name, {
+                    "prompt_id": selected_prompt_id, "filters": st.session_state.report_filters,
+                    "agg_col": agg_col, "agg_type": agg_type, "y_axis_col": y_axis_col,
+                    "chart_type": chart_type, "time_toggle": time_toggle, "time_res": time_res
+                })
                 st.session_state.active_report_name = new_name
                 st.session_state.show_save_dialog = False
                 st.rerun()
@@ -365,197 +403,65 @@ if st.session_state.applied_settings is None:
     st.stop()
 
 settings = st.session_state.applied_settings
-title_prefix = f"Отчет: {settings['report_name']}" if settings.get('report_name') else "Конструктор отчетов"
+df_agg, df_details = get_report_data(
+    settings["start_date"], settings["end_date"], settings["prompt_id"],
+    settings["filters"], settings["agg_col"], settings["agg_type"],
+    settings["y_axis_col"], settings["time_toggle"], settings["time_res"]
+)
 
-df_raw = get_data(settings["start_date"], settings["end_date"], settings["prompt_id"])
-
-if df_raw.empty:
-    st.info("Данные не найдены для выбранных параметров.")
+if df_agg.empty:
+    st.info("Данные не найдены.")
 else:
-    phone_names = get_phone_names()
-    df = df_raw.copy()
+    if settings["agg_type"] == "Процент":
+        total = df_agg['y_val'].sum()
+        df_agg['y_val'] = (df_agg['y_val'] / total * 100).round(2)
 
-    # Предварительная обработка
-    def process_row_basic(row):
-        if row['direction'] == 'incoming':
-            op_num = row['answeredext']
-            cl_num = row['src']
-        else:
-            op_num = row['src']
-            cl_num = row['answeredext']
-        row['operator_name'] = phone_names.get(op_num, op_num)
-        row['client_number'] = cl_num
-        return row
+    title_prefix = f"Отчет: {settings['report_name']}" if settings.get('report_name') else "Конструктор отчетов"
 
-    df = df.apply(process_row_basic, axis=1)
+    fig = None
+    labels_map = {'y_val': settings["agg_type"], 'x_val': format_col_name(settings["agg_col"])}
+    if settings["chart_type"] == "bar": fig = px.bar(df_agg, x='x_val', y='y_val', text='y_val', labels=labels_map, custom_data=['x_val'])
+    elif settings["chart_type"] == "line": fig = px.line(df_agg, x='x_val', y='y_val', markers=True, labels=labels_map, custom_data=['x_val'])
+    elif settings["chart_type"] == "pie": fig = px.pie(df_agg, names='x_val', values='y_val', labels=labels_map, custom_data=['x_val'])
+    elif settings["chart_type"] == "area": fig = px.area(df_agg, x='x_val', y='y_val', labels=labels_map, custom_data=['x_val'])
 
-    # Распаковка JSON
-    for jk in settings["json_keys"]:
-        prefix, key = jk.split('.')
-        col_name = f"{prefix}_json"
-        df[jk] = df[col_name].apply(lambda x: x.get(key) if isinstance(x, dict) else None)
+    st.subheader(f"{title_prefix}: {settings['agg_type']} по {format_col_name(settings['agg_col'])}")
+    selected_points = st.plotly_chart(fig, width="stretch", on_select="rerun", key="report_chart")
 
-    # Применение фильтров
-    for f in settings["filters"]:
-        col = f['column']
-        op = f['op']
-        val = f['value']
-        is_not = f.get('not', False)
+    filtered_selection = df_details.copy()
+    if selected_points and selected_points.selection.get("points"):
+        point = selected_points.selection["points"][0]
+        val = point.get("x") or point.get("label") or (point.get("customdata", [None])[0])
+        if val is not None:
+            filtered_selection = filtered_selection[filtered_selection['x_val'].astype(str) == str(val)]
 
-        mask = pd.Series(True, index=df.index)
+    st.markdown("---")
+    st.subheader(f"Список звонков ({len(filtered_selection)})")
 
-        if op == "равно":
-            if isinstance(val, list):
-                if not val:
-                    mask = pd.Series(True, index=df.index)
-                else:
-                    try:
-                        v_list = [float(x) for x in val]
-                        mask = df[col].isin(v_list)
-                    except:
-                        mask = df[col].astype(str).isin([str(x) for x in val])
-            else:
-                try:
-                    v = float(val)
-                    mask = (df[col] == v)
-                except:
-                    mask = (df[col].astype(str) == str(val))
-        elif op == "больше":
-            mask = (pd.to_numeric(df[col], errors='coerce') > float(val))
-        elif op == "меньше":
-            mask = (pd.to_numeric(df[col], errors='coerce') < float(val))
-        elif op == "содержит":
-            mask = (df[col].astype(str).str.contains(str(val), case=False, na=False))
-        elif op == "начинается с":
-            mask = (df[col].astype(str).str.startswith(str(val), na=False))
-        elif op == "заполнено":
-            mask = (df[col].notnull())
-        elif op == "не заполнено":
-            mask = (df[col].isnull())
+    display_df = filtered_selection[['calldate', 'direction', 'client_number', 'operator_name', 'duration', 'call_purpose', 'politeness_score', 'linkedid']].copy()
+    display_df.columns = ['Дата/время', 'Тип', 'Клиент', 'Оператор', 'Длительность', 'Цель', 'Вежливость', 'linkedid']
+    dir_map = {'incoming': '📥', 'inbound': '📥', 'outgoing': '📤', 'outbound': '📤', 'internal': '🏠'}
+    display_df['Тип'] = display_df['Тип'].apply(lambda x: dir_map.get(str(x).lower(), '❓'))
 
-        if is_not:
-            df = df[~mask]
-        else:
-            df = df[mask]
+    event = st.dataframe(display_df, column_config={"Дата/время": st.column_config.DatetimeColumn(format="DD.MM.YYYY HH:mm"), "linkedid": None},
+                         hide_index=True, on_select="rerun", selection_mode="single-row", key="details_table")
 
-    if df.empty:
-        st.warning("После применения фильтров данных не осталось.")
-    else:
-        # Подготовка данных для графика
-        plot_df = df.copy()
+    if event and event.selection.rows:
+        idx = event.selection.rows[0]
+        if idx < len(display_df):
+            linkedid = display_df.iloc[idx]['linkedid']
+            st.markdown("---")
+            st.subheader(f"Детали звонка: {linkedid}")
+            fpath = get_call_file_path(linkedid)
+            if fpath and os.path.exists(fpath): st.audio(fpath)
+            else: st.error("Аудиофайл не найден.")
 
-        x_axis = settings["agg_col"]
-        if settings["time_toggle"]:
-            if settings["time_res"] == "День":
-                plot_df['time_axis'] = plot_df['calldate'].dt.date
-            else:
-                plot_df['time_axis'] = plot_df['calldate'].dt.strftime('%Y-%m-%d %H:00')
-            x_axis = 'time_axis'
-
-        # Агрегация
-        agg_type = settings["agg_type"]
-        y_axis_col = settings["y_axis_col"]
-
-        if agg_type == "Количество":
-            res_df = plot_df.groupby(x_axis, observed=False).size().reset_index(name='value')
-        elif agg_type == "Сумма":
-            plot_df[y_axis_col] = pd.to_numeric(plot_df[y_axis_col], errors='coerce')
-            res_df = plot_df.groupby(x_axis, observed=False)[y_axis_col].sum().reset_index(name='value')
-        elif agg_type == "Среднее":
-            plot_df[y_axis_col] = pd.to_numeric(plot_df[y_axis_col], errors='coerce')
-            res_df = plot_df.groupby(x_axis, observed=False)[y_axis_col].mean().reset_index(name='value')
-            res_df['value'] = res_df['value'].round(2)
-        elif agg_type == "Процент":
-            counts = plot_df.groupby(x_axis, observed=False).size().reset_index(name='count')
-            total = counts['count'].sum()
-            counts['value'] = (counts['count'] / total * 100).round(2)
-            res_df = counts
-
-        res_df = res_df.sort_values(x_axis)
-
-        # Отрисовка графика
-        fig = None
-        labels_map = {'value': agg_type, x_axis: format_col_name(settings["agg_col"])}
-        chart_type = settings["chart_type"]
-        if chart_type == "bar":
-            fig = px.bar(res_df, x=x_axis, y='value', text='value', labels=labels_map, custom_data=[x_axis])
-        elif chart_type == "line":
-            fig = px.line(res_df, x=x_axis, y='value', markers=True, labels=labels_map, custom_data=[x_axis])
-        elif chart_type == "pie":
-            fig = px.pie(res_df, names=x_axis, values='value', labels=labels_map, custom_data=[x_axis])
-        elif chart_type == "area":
-            fig = px.area(res_df, x=x_axis, y='value', labels=labels_map, custom_data=[x_axis])
-
-        st.subheader(f"{title_prefix}: {agg_type} по {format_col_name(settings['agg_col'])}")
-        selected_points = st.plotly_chart(fig, width="stretch", on_select="rerun", key="report_chart")
-
-        filtered_selection = df.copy()
-        if selected_points and selected_points.selection.get("points"):
-            point = selected_points.selection["points"][0]
-            # Пытаемся получить значение из разных возможных ключей в зависимости от типа графика
-            val = point.get("x")
-            if val is None:
-                val = point.get("label")
-            if val is None:
-                val = point.get("customdata", [None])[0]
-
-            if val is not None:
-                if settings["time_toggle"]:
-                    if settings["time_res"] == "День":
-                        # Приводим к строке для сравнения
-                        filtered_selection = filtered_selection[filtered_selection['calldate'].dt.date.astype(str) == str(val)]
-                    else:
-                        filtered_selection = filtered_selection[filtered_selection['calldate'].dt.strftime('%Y-%m-%d %H:00') == str(val)]
-                else:
-                    filtered_selection = filtered_selection[filtered_selection[settings["agg_col"]].astype(str) == str(val)]
-
-        # --- Детализация ---
-        st.markdown("---")
-        st.subheader(f"Список звонков ({len(filtered_selection)})")
-
-        display_df = filtered_selection[['calldate', 'direction', 'client_number', 'operator_name', 'duration', 'call_purpose', 'politeness_score', 'linkedid']].copy()
-        display_df.columns = ['Дата/время', 'Тип', 'Клиент', 'Оператор', 'Длительность', 'Цель', 'Вежливость', 'linkedid']
-
-        dir_map = {'incoming': '📥', 'inbound': '📥', 'outgoing': '📤', 'outbound': '📤', 'internal': '🏠'}
-        display_df['Тип'] = display_df['Тип'].apply(lambda x: dir_map.get(str(x).lower(), '❓'))
-
-        event = st.dataframe(
-            display_df,
-            column_config={
-                "Дата/время": st.column_config.DatetimeColumn(format="DD.MM.YYYY HH:mm"),
-                "linkedid": None
-            },
-            hide_index=True,
-            on_select="rerun",
-            selection_mode="single-row",
-            key="details_table"
-        )
-
-        if event and event.selection.rows:
-            idx = event.selection.rows[0]
-            if idx < len(display_df):
-                selected_row = display_df.iloc[idx]
-                linkedid = selected_row['linkedid']
-
-                st.markdown("---")
-                st.subheader(f"Детали звонка: {linkedid}")
-
-                fpath = get_call_file_path(linkedid)
-                if fpath and os.path.exists(fpath):
-                    st.audio(fpath)
-                else:
-                    st.error("Аудиофайл не найден.")
-
-                st.markdown("#### Расшифровка")
-                transcript_rows = get_call_transcript(linkedid)
-                if transcript_rows:
-                    for trow in transcript_rows:
-                        m, s = divmod(int(trow['start_time']), 60)
-                        time_str = f"[{m:02d}:{s:02d}]"
-                        label = "👤 **Оператор**" if trow['channel'] == 'operator' else "👥 **Клиент**"
-                        st.markdown(f"{time_str} {label}: {trow['text']}")
-
-                    with st.expander("Весь текст для копирования"):
-                        st.text_area("Текст диалога", format_dialogue(transcript_rows), height=300)
-                else:
-                    st.info("Расшифровка отсутствует.")
+            st.markdown("#### Расшифровка")
+            transcript_rows = get_call_transcript(linkedid)
+            if transcript_rows:
+                for trow in transcript_rows:
+                    m, s = divmod(int(trow['start_time']), 60)
+                    st.markdown(f"[{m:02d}:{s:02d}] {'👤 **Оператор**' if trow['channel'] == 'operator' else '👥 **Клиент**'}: {trow['text']}")
+                with st.expander("Весь текст для копирования"):
+                    st.text_area("Текст диалога", format_dialogue(transcript_rows), height=300)
+            else: st.info("Расшифровка отсутствует.")

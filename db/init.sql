@@ -98,6 +98,7 @@ CREATE TABLE evaluations (
 CREATE INDEX idx_evals_politeness ON evaluations(politeness_score);
 CREATE INDEX idx_evals_purpose ON evaluations(call_purpose);
 CREATE INDEX idx_evals_checklist_gin ON evaluations USING GIN (checklist_json);
+CREATE INDEX idx_evals_metrics_gin ON evaluations USING GIN (metrics_json);
 CREATE INDEX idx_evals_prompt_id ON evaluations(prompt_id);
 CREATE INDEX idx_calls_calldate ON calls(calldate);
 
@@ -132,5 +133,12 @@ CREATE TABLE tasks (
     analyze_all     BOOLEAN DEFAULT FALSE,
     asr_status      VARCHAR(20) DEFAULT 'planned' CHECK (asr_status IN ('planned','processing','completed')),
     llm_status      VARCHAR(20) DEFAULT 'planned' CHECK (llm_status IN ('planned','processing','completed')),
+    created_at      TIMESTAMP DEFAULT now()
+);
+
+CREATE TABLE reports (
+    id              SERIAL PRIMARY KEY,
+    name            VARCHAR(200) NOT NULL UNIQUE,
+    settings        JSONB NOT NULL,
     created_at      TIMESTAMP DEFAULT now()
 );
