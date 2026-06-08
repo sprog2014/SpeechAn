@@ -48,6 +48,16 @@ def apply_schema_updates():
             );
         """)
 
+        print("Creating reports table if not exists...")
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS reports (
+                id              SERIAL PRIMARY KEY,
+                name            VARCHAR(200) NOT NULL UNIQUE,
+                settings        JSONB NOT NULL,
+                created_at      TIMESTAMP DEFAULT now()
+            );
+        """)
+
         conn.commit()
         cur.close()
         conn.close()

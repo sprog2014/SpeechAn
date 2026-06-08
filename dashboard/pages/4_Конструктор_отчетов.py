@@ -65,6 +65,30 @@ def get_sample_record(prompt_id):
         """), {"pid": prompt_id}).fetchone()
         return res
 
+def get_saved_reports():
+    engine = get_engine()
+    try:
+        with engine.connect() as conn:
+            df = pd.read_sql(text("SELECT id, name, settings FROM reports ORDER BY name ASC"), conn)
+            return df
+    except:
+        return pd.DataFrame(columns=['id', 'name', 'settings'])
+
+def save_report(name, settings):
+    engine = get_engine()
+    with engine.connect() as conn:
+        conn.execute(text("""
+            INSERT INTO reports (name, settings) VALUES (:name, :settings)
+            ON CONFLICT (name) DO UPDATE SET settings = EXCLUDED.settings
+        """), {"name": name, "settings": json.dumps(settings)})
+        conn.commit()
+
+def delete_report(report_id):
+    engine = get_engine()
+    with engine.connect() as conn:
+        conn.execute(text("DELETE FROM reports WHERE id = :id"), {"id": report_id})
+        conn.commit()
+
 # Словарь для отображения имен колонок
 column_labels = {
     "calldate": "Дата и время",
@@ -88,10 +112,40 @@ if "last_prompt_id" not in st.session_state:
     st.session_state.last_prompt_id = None
 if "applied_settings" not in st.session_state:
     st.session_state.applied_settings = None
+if "active_report_name" not in st.session_state:
+    st.session_state.active_report_name = None
+if "viz_settings" not in st.session_state:
+    st.session_state.viz_settings = {}
 
 # --- Боковая панель (Настройки отчета) ---
 with st.sidebar:
     st.header("Параметры отчета")
+
+    # Сохраненные отчеты
+    saved_reports = get_saved_reports()
+    report_names = ["-- Новый отчет --"] + saved_reports['name'].tolist()
+    selected_report_name = st.selectbox("Загрузить отчет", report_names)
+
+    if selected_report_name != "-- Новый отчет --":
+        if st.session_state.active_report_name != selected_report_name:
+            # Загружаем настройки
+            report_data = saved_reports[saved_reports['name'] == selected_report_name].iloc[0]
+            s = report_data['settings']
+            if isinstance(s, str):
+                s = json.loads(s)
+
+            st.session_state.report_filters = s.get('filters', [])
+            st.session_state.last_prompt_id = s.get('prompt_id')
+            st.session_state.viz_settings = {
+                "agg_col": s.get("agg_col"),
+                "agg_type": s.get("agg_type"),
+                "y_axis_col": s.get("y_axis_col"),
+                "chart_type": s.get("chart_type"),
+                "time_toggle": s.get("time_toggle"),
+                "time_res": s.get("time_res")
+            }
+            st.session_state.active_report_name = selected_report_name
+            st.rerun()
 
     # 1. Выбор периода
     today = datetime.now().date()
@@ -110,7 +164,7 @@ with st.sidebar:
 
     prompt_options = {p['id']: p['name'] for p in all_prompts}
     default_p = get_default_prompt()
-    default_p_id = default_p['id'] if default_p else all_prompts[0]['id']
+    default_p_id = st.session_state.last_prompt_id or (default_p['id'] if default_p else all_prompts[0]['id'])
 
     selected_prompt_id = st.selectbox(
         "Аналитический промпт",
@@ -177,7 +231,7 @@ with st.sidebar:
     for i, f in enumerate(st.session_state.report_filters):
         with st.expander(f"Фильтр {i+1}: {format_col_name(f['column'])}"):
             f['column'] = st.selectbox(f"Поле", all_available_columns,
-                                      index=all_available_columns.index(f['column']),
+                                      index=all_available_columns.index(f['column']) if f['column'] in all_available_columns else 0,
                                       format_func=format_col_name,
                                       key=f"col_{i}")
 
@@ -217,15 +271,24 @@ with st.sidebar:
                 st.rerun()
 
     st.subheader("Визуализация")
+
+    saved_agg_col = st.session_state.viz_settings.get("agg_col")
     agg_col = st.selectbox("Группировка (X-ось)", all_available_columns,
-                           index=all_available_columns.index("call_purpose") if "call_purpose" in all_available_columns else 0,
+                           index=all_available_columns.index(saved_agg_col) if saved_agg_col in all_available_columns else (all_available_columns.index("call_purpose") if "call_purpose" in all_available_columns else 0),
                            format_func=format_col_name)
-    agg_type = st.selectbox("Тип агрегации (Y-ось)", ["Количество", "Сумма", "Среднее", "Процент"])
+
+    agg_types = ["Количество", "Сумма", "Среднее", "Процент"]
+    saved_agg_type = st.session_state.viz_settings.get("agg_type")
+    agg_type = st.selectbox("Тип агрегации (Y-ось)", agg_types,
+                            index=agg_types.index(saved_agg_type) if saved_agg_type in agg_types else 0)
 
     y_axis_col = None
     if agg_type in ["Сумма", "Среднее"]:
         y_axis_options = [c for c in base_columns if c in ["duration", "billsec", "politeness_score"]] + json_keys
-        y_axis_col = st.selectbox("Поле для расчета", y_axis_options, format_func=format_col_name)
+        saved_y_axis = st.session_state.viz_settings.get("y_axis_col")
+        y_axis_col = st.selectbox("Поле для расчета", y_axis_options,
+                                  index=y_axis_options.index(saved_y_axis) if saved_y_axis in y_axis_options else 0,
+                                  format_func=format_col_name)
 
     chart_type_map = {
         "Столбчатая": "bar",
@@ -233,14 +296,22 @@ with st.sidebar:
         "Круговая": "pie",
         "Область": "area"
     }
-    selected_chart_label = st.selectbox("Тип диаграммы", list(chart_type_map.keys()))
+    saved_chart_type = st.session_state.viz_settings.get("chart_type")
+    # Инвертируем мапу для поиска лейбла по значению
+    inv_chart_map = {v: k for k, v in chart_type_map.items()}
+    default_chart_label = inv_chart_map.get(saved_chart_type, "Столбчатая")
+
+    selected_chart_label = st.selectbox("Тип диаграммы", list(chart_type_map.keys()),
+                                        index=list(chart_type_map.keys()).index(default_chart_label))
     chart_type = chart_type_map[selected_chart_label]
 
-    time_toggle = st.checkbox("Ось времени (Дни/Часы)")
-    time_res = "День"
-    if time_toggle:
-        time_res = st.radio("Детализация", ["День", "Час"])
+    time_toggle = st.checkbox("Ось времени (Дни/Часы)", value=st.session_state.viz_settings.get("time_toggle", False))
+    time_res_options = ["День", "Час"]
+    saved_time_res = st.session_state.viz_settings.get("time_res")
+    time_res = st.radio("Детализация", time_res_options,
+                        index=time_res_options.index(saved_time_res) if saved_time_res in time_res_options else 0)
 
+    st.markdown("---")
     if st.button("Применить", type="primary", width="stretch"):
         st.session_state.applied_settings = {
             "start_date": start_date,
@@ -253,8 +324,40 @@ with st.sidebar:
             "chart_type": chart_type,
             "time_toggle": time_toggle,
             "time_res": time_res,
-            "json_keys": json_keys
+            "json_keys": json_keys,
+            "report_name": st.session_state.active_report_name
         }
+
+    # Кнопки сохранения
+    col_save, col_del = st.columns(2)
+    with col_save:
+        if st.button("Сохранить"):
+            st.session_state.show_save_dialog = True
+    with col_del:
+        if st.session_state.active_report_name and st.button("Удалить"):
+            rep_id = saved_reports[saved_reports['name'] == st.session_state.active_report_name].iloc[0]['id']
+            delete_report(rep_id)
+            st.session_state.active_report_name = None
+            st.rerun()
+
+    if st.session_state.get("show_save_dialog"):
+        with st.form("save_report_form"):
+            new_name = st.text_input("Имя отчета", value=st.session_state.active_report_name or "")
+            if st.form_submit_button("Подтвердить"):
+                current_settings = {
+                    "prompt_id": selected_prompt_id,
+                    "filters": st.session_state.report_filters,
+                    "agg_col": agg_col,
+                    "agg_type": agg_type,
+                    "y_axis_col": y_axis_col,
+                    "chart_type": chart_type,
+                    "time_toggle": time_toggle,
+                    "time_res": time_res
+                }
+                save_report(new_name, current_settings)
+                st.session_state.active_report_name = new_name
+                st.session_state.show_save_dialog = False
+                st.rerun()
 
 # --- Основная область ---
 if st.session_state.applied_settings is None:
@@ -262,6 +365,7 @@ if st.session_state.applied_settings is None:
     st.stop()
 
 settings = st.session_state.applied_settings
+title_prefix = f"Отчет: {settings['report_name']}" if settings.get('report_name') else "Конструктор отчетов"
 
 df_raw = get_data(settings["start_date"], settings["end_date"], settings["prompt_id"])
 
@@ -305,7 +409,6 @@ else:
                 if not val:
                     mask = pd.Series(True, index=df.index)
                 else:
-                    # Пытаемся сравнить как числа или как строки
                     try:
                         v_list = [float(x) for x in val]
                         mask = df[col].isin(v_list)
@@ -383,7 +486,7 @@ else:
         elif chart_type == "area":
             fig = px.area(res_df, x=x_axis, y='value', labels=labels_map, custom_data=[x_axis])
 
-        st.subheader(f"Отчет: {agg_type} по {format_col_name(settings['agg_col'])}")
+        st.subheader(f"{title_prefix}: {agg_type} по {format_col_name(settings['agg_col'])}")
         selected_points = st.plotly_chart(fig, width="stretch", on_select="rerun", key="report_chart")
 
         filtered_selection = df.copy()
@@ -434,25 +537,25 @@ else:
                 selected_row = display_df.iloc[idx]
                 linkedid = selected_row['linkedid']
 
-            st.markdown("---")
-            st.subheader(f"Детали звонка: {linkedid}")
+                st.markdown("---")
+                st.subheader(f"Детали звонка: {linkedid}")
 
-            fpath = get_call_file_path(linkedid)
-            if fpath and os.path.exists(fpath):
-                st.audio(fpath)
-            else:
-                st.error("Аудиофайл не найден.")
+                fpath = get_call_file_path(linkedid)
+                if fpath and os.path.exists(fpath):
+                    st.audio(fpath)
+                else:
+                    st.error("Аудиофайл не найден.")
 
-            st.markdown("#### Расшифровка")
-            transcript_rows = get_call_transcript(linkedid)
-            if transcript_rows:
-                for trow in transcript_rows:
-                    m, s = divmod(int(trow['start_time']), 60)
-                    time_str = f"[{m:02d}:{s:02d}]"
-                    label = "👤 **Оператор**" if trow['channel'] == 'operator' else "👥 **Клиент**"
-                    st.markdown(f"{time_str} {label}: {trow['text']}")
+                st.markdown("#### Расшифровка")
+                transcript_rows = get_call_transcript(linkedid)
+                if transcript_rows:
+                    for trow in transcript_rows:
+                        m, s = divmod(int(trow['start_time']), 60)
+                        time_str = f"[{m:02d}:{s:02d}]"
+                        label = "👤 **Оператор**" if trow['channel'] == 'operator' else "👥 **Клиент**"
+                        st.markdown(f"{time_str} {label}: {trow['text']}")
 
-                with st.expander("Весь текст для копирования"):
-                    st.text_area("Текст диалога", format_dialogue(transcript_rows), height=300)
-            else:
-                st.info("Расшифровка отсутствует.")
+                    with st.expander("Весь текст для копирования"):
+                        st.text_area("Текст диалога", format_dialogue(transcript_rows), height=300)
+                else:
+                    st.info("Расшифровка отсутствует.")
