@@ -189,18 +189,24 @@ with st.sidebar:
                 f['op'] = st.selectbox(f"Операция", ops, index=ops.index(f['op']) if f['op'] in ops else 0, key=f"op_{i}")
 
             if f['op'] not in ["заполнено", "не заполнено"]:
-                # Если "равно", предлагаем выбор из списка
+                # Если "равно", предлагаем выбор из списка (мультиселект)
                 if f['op'] == "равно":
                     unique_vals = []
                     if not df_for_metadata.empty and f['column'] in df_for_metadata.columns:
                         unique_vals = sorted([str(x) for x in df_for_metadata[f['column']].unique() if x is not None])
 
                     if unique_vals:
-                        # Если текущее значение не в списке, добавляем его или сбрасываем
-                        current_val = str(f['value'])
-                        if current_val not in unique_vals:
-                            unique_vals = [current_val] + unique_vals
-                        f['value'] = st.selectbox(f"Значение", unique_vals, index=unique_vals.index(current_val), key=f"val_{i}")
+                        # Если текущее значение (строка или список) содержит элементы не из списка, добавляем их
+                        if isinstance(f['value'], list):
+                            current_vals = [str(v) for v in f['value']]
+                        else:
+                            current_vals = [str(f['value'])] if f['value'] else []
+
+                        for v in current_vals:
+                            if v not in unique_vals:
+                                unique_vals = [v] + unique_vals
+
+                        f['value'] = st.multiselect(f"Значение", unique_vals, default=current_vals, key=f"val_{i}")
                     else:
                         f['value'] = st.text_input(f"Значение", value=f['value'], key=f"val_{i}")
                 else:
@@ -295,11 +301,22 @@ else:
         mask = pd.Series(True, index=df.index)
 
         if op == "равно":
-            try:
-                v = float(val)
-                mask = (df[col] == v)
-            except:
-                mask = (df[col].astype(str) == str(val))
+            if isinstance(val, list):
+                if not val:
+                    mask = pd.Series(True, index=df.index)
+                else:
+                    # Пытаемся сравнить как числа или как строки
+                    try:
+                        v_list = [float(x) for x in val]
+                        mask = df[col].isin(v_list)
+                    except:
+                        mask = df[col].astype(str).isin([str(x) for x in val])
+            else:
+                try:
+                    v = float(val)
+                    mask = (df[col] == v)
+                except:
+                    mask = (df[col].astype(str) == str(val))
         elif op == "больше":
             mask = (pd.to_numeric(df[col], errors='coerce') > float(val))
         elif op == "меньше":
