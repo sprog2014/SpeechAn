@@ -37,20 +37,36 @@ def get_report_data(start_date, end_date, prompt_id, filters, agg_col, agg_type,
         "end": end_date + timedelta(days=1)
     }
 
-    def get_sql_col(col):
+    def get_sql_col(col, as_numeric=False):
+        expr = ""
         if col.startswith("checklist."):
-            return f"e.checklist_json->>'{col.split('.')[1]}'"
-        if col.startswith("metrics."):
-            return f"e.metrics_json->>'{col.split('.')[1]}'"
-        if col == "operator_name":
-            return "COALESCE(p.name, CASE WHEN c.direction = 'incoming' THEN c.answeredext ELSE c.src END)"
-        if col == "client_number":
-            return "CASE WHEN c.direction = 'incoming' THEN c.src ELSE c.answeredext END"
-        return f"c.{col}" if col in ["calldate", "direction", "duration", "billsec"] else f"e.{col}"
+            key = col.split('.')[1]
+            expr = f"e.checklist_json->>'{key}'"
+            if as_numeric:
+                # Конвертируем true/false в 1/0 для агрегаций
+                expr = f"CASE WHEN {expr} = 'true' THEN 1 WHEN {expr} = 'false' THEN 0 ELSE NULL END"
+        elif col.startswith("metrics."):
+            key = col.split('.')[1]
+            expr = f"e.metrics_json->>'{key}'"
+            if as_numeric:
+                expr = f"({expr})::numeric"
+        elif col == "operator_name":
+            expr = "COALESCE(p.name, CASE WHEN c.direction = 'incoming' THEN c.answeredext ELSE c.src END)"
+        elif col == "client_number":
+            expr = "CASE WHEN c.direction = 'incoming' THEN c.src ELSE c.answeredext END"
+        else:
+            expr = f"c.{col}" if col in ["calldate", "direction", "duration", "billsec"] else f"e.{col}"
+            if as_numeric and col in ["duration", "billsec", "politeness_score"]:
+                expr = f"({expr})::numeric"
+        return expr
 
     for i, f in enumerate(filters):
-        col_sql = get_sql_col(f['column'])
+        col = f['column']
         op = f['op']
+
+        # Для сравнений больше/меньше нам нужно числовое представление
+        is_num_op = op in ["больше", "меньше"]
+        col_sql = get_sql_col(col, as_numeric=is_num_op)
         val = f['value']
         is_not = f.get('not', False)
 
@@ -70,10 +86,10 @@ def get_report_data(start_date, end_date, prompt_id, filters, agg_col, agg_type,
                 clause = f"{col_sql} = :v_{i}"
                 params[p_name] = val
         elif op == "больше":
-            clause = f"({col_sql})::numeric > :v_{i}"
+            clause = f"{col_sql} > :v_{i}"
             params[p_name] = float(val)
         elif op == "меньше":
-            clause = f"({col_sql})::numeric < :v_{i}"
+            clause = f"{col_sql} < :v_{i}"
             params[p_name] = float(val)
         elif op == "содержит":
             clause = f"{col_sql} ILIKE :v_{i}"
@@ -103,9 +119,9 @@ def get_report_data(start_date, end_date, prompt_id, filters, agg_col, agg_type,
     if agg_type == "Количество":
         y_sql = "COUNT(*)"
     elif agg_type == "Сумма":
-        y_sql = f"SUM(({get_sql_col(y_axis_col)})::numeric)"
+        y_sql = f"SUM({get_sql_col(y_axis_col, as_numeric=True)})"
     elif agg_type == "Среднее":
-        y_sql = f"ROUND(AVG(({get_sql_col(y_axis_col)})::numeric), 2)"
+        y_sql = f"ROUND(AVG({get_sql_col(y_axis_col, as_numeric=True)}), 2)"
     elif agg_type == "Процент":
         y_sql = "COUNT(*)" # Процент посчитаем в пандасе из долей
 
@@ -403,11 +419,15 @@ if st.session_state.applied_settings is None:
     st.stop()
 
 settings = st.session_state.applied_settings
-df_agg, df_details = get_report_data(
-    settings["start_date"], settings["end_date"], settings["prompt_id"],
-    settings["filters"], settings["agg_col"], settings["agg_type"],
-    settings["y_axis_col"], settings["time_toggle"], settings["time_res"]
-)
+try:
+    df_agg, df_details = get_report_data(
+        settings["start_date"], settings["end_date"], settings["prompt_id"],
+        settings["filters"], settings["agg_col"], settings["agg_type"],
+        settings["y_axis_col"], settings["time_toggle"], settings["time_res"]
+    )
+except Exception as e:
+    st.error(f"Ошибка при формировании отчета: {e}")
+    st.stop()
 
 if df_agg.empty:
     st.info("Данные не найдены.")
