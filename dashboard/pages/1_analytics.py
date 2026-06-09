@@ -61,19 +61,19 @@ def get_analytics_data(start_date, end_date, prompt_id, filters=None):
     if filters:
         if filters.get("purpose"):
             where_clauses.append(f"{purpose_sql} = :f_purpose")
-            params["purpose"] = filters["purpose"]
+            params["f_purpose"] = filters["purpose"]
         if filters.get("sentiment"):
             where_clauses.append(f"{sentiment_sql} = :f_sentiment")
-            params["sentiment"] = filters["sentiment"]
+            params["f_sentiment"] = filters["sentiment"]
         if filters.get("hour") is not None:
             where_clauses.append("EXTRACT(HOUR FROM c.calldate) = :f_hour")
-            params["hour"] = filters["hour"]
+            params["f_hour"] = filters["hour"]
         if filters.get("type"):
             where_clauses.append(f"{direction_sql} = :f_type")
-            params["type"] = filters["type"]
+            params["f_type"] = filters["type"]
         if filters.get("date"):
             where_clauses.append("DATE(c.calldate) = :f_date")
-            params["date"] = filters["date"]
+            params["f_date"] = filters["date"]
 
     where_str = " AND ".join(where_clauses)
 
