@@ -415,16 +415,21 @@ with st.sidebar:
     with c_sort1:
         sort_axis_options = {"x_val": "Ось X", "y_val": "Ось Y"}
         saved_sort_axis = st.session_state.viz_settings.get("sort_axis", "x_val")
+        # Обеспечиваем корректный индекс, если значение в сессии внезапно некорректно
+        ax_idx = list(sort_axis_options.keys()).index(saved_sort_axis) if saved_sort_axis in sort_axis_options else 0
         sort_axis = st.radio("По оси", options=list(sort_axis_options.keys()),
                              format_func=lambda x: sort_axis_options[x],
-                             index=list(sort_axis_options.keys()).index(saved_sort_axis) if saved_sort_axis in sort_axis_options else 0,
+                             index=ax_idx,
+                             key=f"sort_axis_radio_{selected_report_name}",
                              label_visibility="collapsed")
     with c_sort2:
         sort_dir_options = {"ASC": "⬇️", "DESC": "⬆️"}
         saved_sort_dir = st.session_state.viz_settings.get("sort_dir", "ASC")
+        dir_idx = list(sort_dir_options.keys()).index(saved_sort_dir) if saved_sort_dir in sort_dir_options else 0
         sort_dir = st.radio("Направление", options=list(sort_dir_options.keys()),
                             format_func=lambda x: sort_dir_options[x],
-                            index=list(sort_dir_options.keys()).index(saved_sort_dir) if saved_sort_dir in sort_dir_options else 0,
+                            index=dir_idx,
+                            key=f"sort_dir_radio_{selected_report_name}",
                             label_visibility="collapsed")
 
     st.markdown("---")
@@ -452,13 +457,21 @@ with st.sidebar:
         with st.form("save_report_form"):
             new_name = st.text_input("Имя отчета", value=st.session_state.active_report_name or "")
             if st.form_submit_button("Подтвердить"):
-                save_report(new_name, {
+                rep_settings = {
                     "prompt_id": selected_prompt_id, "filters": st.session_state.report_filters,
                     "agg_col": agg_col, "agg_type": agg_type, "y_axis_col": y_axis_col,
                     "chart_type": chart_type, "time_toggle": time_toggle, "time_res": time_res,
                     "sort_axis": sort_axis, "sort_dir": sort_dir
-                })
+                }
+                save_report(new_name, rep_settings)
+
+                # Обновляем состояние, чтобы после rerun всё отобразилось корректно
                 st.session_state.active_report_name = new_name
+                st.session_state.viz_settings = rep_settings.copy()
+                if st.session_state.applied_settings:
+                    st.session_state.applied_settings.update(rep_settings)
+                    st.session_state.applied_settings["report_name"] = new_name
+
                 st.session_state.show_save_dialog = False
                 st.rerun()
 
