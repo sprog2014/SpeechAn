@@ -10,7 +10,10 @@ import json
 # Добавляем путь к src, чтобы найти config.py и db_utils.py
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src'))
 from config import PG_CONFIG
-from db_utils import get_all_prompts, get_default_prompt, get_call_file_path, get_call_transcript, format_dialogue
+from db_utils import (
+    get_all_prompts, get_default_prompt, get_call_file_path,
+    get_call_transcript, format_dialogue, get_value_mappings
+)
 
 # Проверка авторизации
 if not st.session_state.get("password_correct", False):
@@ -26,7 +29,7 @@ def get_engine():
     return create_engine(db_url)
 
 @st.cache_data(ttl=60)
-def get_report_data(start_date, end_date, prompt_id, filters, agg_col, agg_type, y_axis_col, time_toggle, time_res, sort_axis="X", sort_dir="ASC"):
+def get_report_data(start_date, end_date, prompt_id, filters, agg_col, agg_type, y_axis_col, time_toggle, time_res):
     engine = get_engine()
 
     # 1. Формируем WHERE
@@ -36,6 +39,26 @@ def get_report_data(start_date, end_date, prompt_id, filters, agg_col, agg_type,
         "start": start_date,
         "end": end_date + timedelta(days=1)
     }
+
+    # Получаем динамические маппинги
+    all_mappings = get_value_mappings()
+    mapping = next((m for m in all_mappings if m['prompt_id'] == prompt_id), None)
+
+    def build_case_sql(column, mapping_list, default_label):
+        if not mapping_list:
+            return f"COALESCE(e.{column}, '{default_label}')"
+        sql = f"CASE e.{column} "
+        for item in mapping_list:
+            for k, v in item.items():
+                k_esc = str(k).replace("'", "''")
+                v_esc = str(v).replace("'", "''")
+                sql += f"WHEN '{k_esc}' THEN '{v_esc}' "
+        default_label_esc = str(default_label).replace("'", "''")
+        sql += f"ELSE COALESCE(e.{column}, '{default_label_esc}') END"
+        return sql
+
+    purpose_sql = build_case_sql('call_purpose', mapping['call_purpose'] if mapping else [], 'Другое')
+    sentiment_sql = build_case_sql('client_sentiment', mapping['client_sentiment'] if mapping else [], 'Не определено')
 
     def get_sql_col(col, as_numeric=False):
         expr = ""
@@ -54,6 +77,10 @@ def get_report_data(start_date, end_date, prompt_id, filters, agg_col, agg_type,
             expr = "COALESCE(p.name, CASE WHEN c.direction = 'incoming' THEN c.answeredext ELSE c.src END)"
         elif col == "client_number":
             expr = "CASE WHEN c.direction = 'incoming' THEN c.src ELSE c.answeredext END"
+        elif col == "call_purpose":
+            expr = purpose_sql
+        elif col == "client_sentiment":
+            expr = sentiment_sql
         else:
             expr = f"c.{col}" if col in ["calldate", "direction", "duration", "billsec"] else f"e.{col}"
             if as_numeric and col in ["duration", "billsec", "politeness_score"]:
@@ -125,7 +152,6 @@ def get_report_data(start_date, end_date, prompt_id, filters, agg_col, agg_type,
     elif agg_type == "Процент":
         y_sql = "COUNT(*)" # Процент посчитаем в пандасе из долей
 
-    sort_col = "1" if sort_axis == "X" else "2"
     query_agg = f"""
         SELECT {x_sql} as x_val, {y_sql} as y_val
         FROM calls c
@@ -133,7 +159,7 @@ def get_report_data(start_date, end_date, prompt_id, filters, agg_col, agg_type,
         LEFT JOIN phones p ON p.number = (CASE WHEN c.direction = 'incoming' THEN c.answeredext ELSE c.src END)
         WHERE {where_str}
         GROUP BY 1
-        ORDER BY {sort_col} {sort_dir}
+        ORDER BY 1
     """
 
     # 4. Запрос для детализации (Лимит 1000 для скорости)
@@ -142,7 +168,7 @@ def get_report_data(start_date, end_date, prompt_id, filters, agg_col, agg_type,
             c.calldate, c.direction,
             CASE WHEN c.direction = 'incoming' THEN c.src ELSE c.answeredext END as client_number,
             COALESCE(p.name, CASE WHEN c.direction = 'incoming' THEN c.answeredext ELSE c.src END) as operator_name,
-            c.duration, e.call_purpose, e.politeness_score, c.linkedid,
+            c.duration, {purpose_sql} as call_purpose, e.politeness_score, c.linkedid,
             {x_sql} as x_val
         FROM calls c
         JOIN evaluations e ON c.linkedid = e.linkedid
@@ -270,9 +296,7 @@ with st.sidebar:
                 "y_axis_col": s.get("y_axis_col"),
                 "chart_type": s.get("chart_type"),
                 "time_toggle": s.get("time_toggle"),
-                "time_res": s.get("time_res"),
-                "sort_axis": s.get("sort_axis", "X"),
-                "sort_dir": s.get("sort_dir", "ASC")
+                "time_res": s.get("time_res")
             }
             st.session_state.active_report_name = selected_report_name
             st.rerun()
@@ -354,26 +378,14 @@ with st.sidebar:
                 st.rerun()
 
     st.subheader("Визуализация")
+    saved_agg_col = st.session_state.viz_settings.get("agg_col")
+    agg_col = st.selectbox("Группировка (X-ось)", all_available_columns,
+                           index=all_available_columns.index(saved_agg_col) if saved_agg_col in all_available_columns else (all_available_columns.index("call_purpose") if "call_purpose" in all_available_columns else 0),
+                           format_func=format_col_name)
 
-    saved_sort_axis = st.session_state.viz_settings.get("sort_axis", "X")
-    saved_sort_dir = st.session_state.viz_settings.get("sort_dir", "ASC")
-
-    c_axes, c_sort = st.columns([0.85, 0.15])
-    with c_axes:
-        saved_agg_col = st.session_state.viz_settings.get("agg_col")
-        agg_col = st.selectbox("Группировка (X-ось)", all_available_columns,
-                               index=all_available_columns.index(saved_agg_col) if saved_agg_col in all_available_columns else (all_available_columns.index("call_purpose") if "call_purpose" in all_available_columns else 0),
-                               format_func=format_col_name)
-
-        agg_types = ["Количество", "Сумма", "Среднее", "Процент"]
-        saved_agg_type = st.session_state.viz_settings.get("agg_type")
-        agg_type = st.selectbox("Тип агрегации (Y-ось)", agg_types, index=agg_types.index(saved_agg_type) if saved_agg_type in agg_types else 0)
-
-    with c_sort:
-        st.write("<div style='height: 28px;'></div>", unsafe_allow_html=True)
-        sort_axis = st.radio("Ось сортировки", ["X", "Y"],
-                             index=0 if saved_sort_axis == "X" else 1,
-                             label_visibility="collapsed")
+    agg_types = ["Количество", "Сумма", "Среднее", "Процент"]
+    saved_agg_type = st.session_state.viz_settings.get("agg_type")
+    agg_type = st.selectbox("Тип агрегации (Y-ось)", agg_types, index=agg_types.index(saved_agg_type) if saved_agg_type in agg_types else 0)
 
     y_axis_col = None
     if agg_type in ["Сумма", "Среднее"]:
@@ -382,12 +394,6 @@ with st.sidebar:
         y_axis_col = st.selectbox("Поле для расчета", y_axis_options,
                                   index=y_axis_options.index(saved_y_axis) if saved_y_axis in y_axis_options else 0,
                                   format_func=format_col_name)
-
-    sort_dir_map = {"По возрастанию": "ASC", "По убыванию": "DESC"}
-    inv_sort_dir_map = {v: k for k, v in sort_dir_map.items()}
-    sort_dir_label = st.selectbox("Направление сортировки", list(sort_dir_map.keys()),
-                                  index=list(sort_dir_map.keys()).index(inv_sort_dir_map.get(saved_sort_dir, "По возрастанию")))
-    sort_dir = sort_dir_map[sort_dir_label]
 
     chart_type_map = {"Столбчатая": "bar", "Линейная": "line", "Круговая": "pie", "Область": "area"}
     saved_chart_type = st.session_state.viz_settings.get("chart_type")
@@ -408,7 +414,6 @@ with st.sidebar:
             "filters": [f.copy() for f in st.session_state.report_filters],
             "agg_col": agg_col, "agg_type": agg_type, "y_axis_col": y_axis_col,
             "chart_type": chart_type, "time_toggle": time_toggle, "time_res": time_res,
-            "sort_axis": sort_axis, "sort_dir": sort_dir,
             "report_name": st.session_state.active_report_name
         }
 
@@ -429,8 +434,7 @@ with st.sidebar:
                 save_report(new_name, {
                     "prompt_id": selected_prompt_id, "filters": st.session_state.report_filters,
                     "agg_col": agg_col, "agg_type": agg_type, "y_axis_col": y_axis_col,
-                    "chart_type": chart_type, "time_toggle": time_toggle, "time_res": time_res,
-                    "sort_axis": sort_axis, "sort_dir": sort_dir
+                    "chart_type": chart_type, "time_toggle": time_toggle, "time_res": time_res
                 })
                 st.session_state.active_report_name = new_name
                 st.session_state.show_save_dialog = False
@@ -446,8 +450,7 @@ try:
     df_agg, df_details = get_report_data(
         settings["start_date"], settings["end_date"], settings["prompt_id"],
         settings["filters"], settings["agg_col"], settings["agg_type"],
-        settings["y_axis_col"], settings["time_toggle"], settings["time_res"],
-        settings.get("sort_axis", "X"), settings.get("sort_dir", "ASC")
+        settings["y_axis_col"], settings["time_toggle"], settings["time_res"]
     )
 except Exception as e:
     st.error(f"Ошибка при формировании отчета: {e}")

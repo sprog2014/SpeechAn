@@ -9,7 +9,10 @@ from datetime import datetime, timedelta
 # Добавляем путь к src, чтобы найти config.py и db_utils.py
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src'))
 from config import PG_CONFIG
-from db_utils import get_all_prompts, get_default_prompt, get_call_file_path, get_call_transcript, format_dialogue
+from db_utils import (
+    get_all_prompts, get_default_prompt, get_call_file_path,
+    get_call_transcript, format_dialogue, get_value_mappings
+)
 
 if not st.session_state.get("password_correct", False):
     st.error("Пожалуйста, авторизуйтесь на главной странице.")
@@ -34,21 +37,26 @@ def get_analytics_data(start_date, end_date, prompt_id, filters=None):
         "pid": prompt_id
     }
 
-    # Словари для маппинга (используем в SQL)
-    purpose_sql = """CASE e.call_purpose
-        WHEN 'appointment' THEN 'Запись на прием'
-        WHEN 'consultation' THEN 'Консультация'
-        WHEN 'complaint' THEN 'Жалоба'
-        WHEN 'cancel_appointment' THEN 'Отмена записи'
-        WHEN 'reschedule_appointment' THEN 'Перенос записи'
-        ELSE COALESCE(e.call_purpose, 'Другое') END"""
+    # Получаем динамические маппинги
+    all_mappings = get_value_mappings()
+    mapping = next((m for m in all_mappings if m['prompt_id'] == prompt_id), None)
 
-    sentiment_sql = """CASE e.client_sentiment
-        WHEN 'positive' THEN 'Положительное'
-        WHEN 'neutral' THEN 'Нейтральное'
-        WHEN 'negative' THEN 'Отрицательное'
-        WHEN 'conflict' THEN 'Конфликт'
-        ELSE COALESCE(e.client_sentiment, 'Не определено') END"""
+    def build_case_sql(column, mapping_list, default_label):
+        if not mapping_list:
+            return f"COALESCE(e.{column}, '{default_label}')"
+        sql = f"CASE e.{column} "
+        for item in mapping_list:
+            for k, v in item.items():
+                # Экранируем одинарные кавычки для безопасности SQL
+                k_esc = str(k).replace("'", "''")
+                v_esc = str(v).replace("'", "''")
+                sql += f"WHEN '{k_esc}' THEN '{v_esc}' "
+        default_label_esc = str(default_label).replace("'", "''")
+        sql += f"ELSE COALESCE(e.{column}, '{default_label_esc}') END"
+        return sql
+
+    purpose_sql = build_case_sql('call_purpose', mapping['call_purpose'] if mapping else [], 'Другое')
+    sentiment_sql = build_case_sql('client_sentiment', mapping['client_sentiment'] if mapping else [], 'Не определено')
 
     direction_sql = """CASE LOWER(c.direction)
         WHEN 'incoming' THEN '📥'

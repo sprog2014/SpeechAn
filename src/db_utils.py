@@ -488,6 +488,55 @@ def delete_prompt(prompt_id, conn=None):
         with get_pg_connection() as conn:
             _execute(conn)
 
+def get_value_mappings(conn=None):
+    def _execute(c):
+        cur = c.cursor()
+        cur.execute("SELECT value FROM system_settings WHERE key = 'value_mappings'")
+        row = cur.fetchone()
+        if row:
+            try:
+                return json.loads(row[0])
+            except:
+                return []
+        return []
+
+    if conn:
+        return _execute(conn)
+    else:
+        with get_pg_connection() as conn:
+            return _execute(conn)
+
+def set_value_mappings(mappings, conn=None):
+    def _execute(c):
+        cur = c.cursor()
+        cur.execute("""
+            INSERT INTO system_settings (key, value)
+            VALUES ('value_mappings', %s)
+            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+        """, (json.dumps(mappings, ensure_ascii=False),))
+        c.commit()
+
+    if conn:
+        _execute(conn)
+    else:
+        with get_pg_connection() as conn:
+            _execute(conn)
+
+def update_evaluations_value(prompt_id, column, old_value, new_value, conn=None):
+    if column not in ['call_purpose', 'client_sentiment']:
+        return
+    def _execute(c):
+        cur = c.cursor()
+        query = f"UPDATE evaluations SET {column} = %s WHERE prompt_id = %s AND {column} = %s"
+        cur.execute(query, (new_value, prompt_id, old_value))
+        c.commit()
+
+    if conn:
+        _execute(conn)
+    else:
+        with get_pg_connection() as conn:
+            _execute(conn)
+
 def set_call_status(linkedid, status, conn=None):
     def _execute(c):
         cur = c.cursor()

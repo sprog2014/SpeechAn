@@ -16,7 +16,9 @@ from db_utils import (
     get_all_prompts, upsert_prompt, delete_prompt, set_default_prompt,
     get_pg_connection, get_all_phones, update_phone_use, sync_phones_from_external_db,
     get_system_setting, set_system_setting,
-    get_all_tasks, add_task, delete_task
+    get_all_tasks, add_task, delete_task,
+    get_value_mappings, set_value_mappings, update_evaluations_value,
+    get_pg_connection
 )
 from config import PG_CONFIG
 
@@ -192,7 +194,150 @@ if tasks:
 else:
     st.info("Нет активных или запланированных заданий.")
 
-# --- Раздел 4: Телефонный справочник ---
+# --- Раздел 4: Редактирование значений (Настроение и Цели) ---
+st.header("Редактирование значений (Настроение и Цели)")
+
+all_mappings = get_value_mappings()
+
+if prompts:
+    # Выбор промпта для редактирования значений
+    prompt_options_map = {p['id']: p['name'] for p in prompts}
+    mapping_prompt_id = st.selectbox(
+        "Выберите промпт для настройки значений",
+        options=list(prompt_options_map.keys()),
+        format_func=lambda x: prompt_options_map[x],
+        key="mapping_prompt_select"
+    )
+
+    # Находим или создаем запись для этого промпта
+    current_mapping = next((m for m in all_mappings if m['prompt_id'] == mapping_prompt_id), None)
+    if not current_mapping:
+        current_mapping = {
+            "prompt_id": mapping_prompt_id,
+            "call_purpose": [],
+            "client_sentiment": []
+        }
+        all_mappings.append(current_mapping)
+
+    def manage_mapping_list(label, key_name):
+        st.subheader(label)
+        items = current_mapping.get(key_name, [])
+
+        # Превращаем [{key: val}, ...] в [{"key": k, "label": v}, ...] для удобства st.data_editor
+        display_items = []
+        for item in items:
+            for k, v in item.items():
+                display_items.append({"key": k, "label": v})
+
+        if not display_items:
+            df_items = pd.DataFrame(columns=["key", "label"])
+        else:
+            df_items = pd.DataFrame(display_items)
+
+        edited_items = st.data_editor(
+            df_items,
+            column_config={
+                "key": st.column_config.TextColumn("Техническое значение (в JSON)"),
+                "label": st.column_config.TextColumn("Представление для отчетов")
+            },
+            num_rows="dynamic",
+            key=f"editor_{key_name}_{mapping_prompt_id}",
+            hide_index=True,
+            width='stretch'
+        )
+
+        if st.button(f"Сохранить {label}", key=f"save_{key_name}"):
+            new_list = []
+            for _, row in edited_items.iterrows():
+                if pd.notna(row['key']) and str(row['key']).strip():
+                    new_list.append({str(row['key']).strip(): str(row['label']).strip()})
+            current_mapping[key_name] = new_list
+            set_value_mappings(all_mappings)
+            st.success("Сохранено!")
+            st.rerun()
+
+        return items
+
+    col_m1, col_m2 = st.columns(2)
+    with col_m1:
+        purpose_items = manage_mapping_list("Цели звонка (call_purpose)", "call_purpose")
+    with col_m2:
+        sentiment_items = manage_mapping_list("Настроение клиента (client_sentiment)", "client_sentiment")
+
+    # --- Подраздел: Поиск и замена ---
+    st.subheader("Поиск и замена несоответствующих значений")
+    if st.button("Проверить соответствие"):
+        # Получаем все уникальные значения из БД для этого промпта
+        with get_pg_connection() as conn:
+            cur = conn.cursor()
+
+            # call_purpose
+            cur.execute("SELECT DISTINCT call_purpose FROM evaluations WHERE prompt_id = %s AND call_purpose IS NOT NULL", (mapping_prompt_id,))
+            db_purposes = [r[0] for r in cur.fetchall()]
+            allowed_purposes = [list(item.keys())[0] for item in current_mapping['call_purpose']]
+            invalid_purposes = [v for v in db_purposes if v not in allowed_purposes]
+
+            # client_sentiment
+            cur.execute("SELECT DISTINCT client_sentiment FROM evaluations WHERE prompt_id = %s AND client_sentiment IS NOT NULL", (mapping_prompt_id,))
+            db_sentiments = [r[0] for r in cur.fetchall()]
+            allowed_sentiments = [list(item.keys())[0] for item in current_mapping['client_sentiment']]
+            invalid_sentiments = [v for v in db_sentiments if v not in allowed_sentiments]
+
+            st.session_state.invalid_values = {
+                "call_purpose": invalid_purposes,
+                "client_sentiment": invalid_sentiments,
+                "allowed_purposes": allowed_purposes,
+                "allowed_sentiments": allowed_sentiments
+            }
+
+    if "invalid_values" in st.session_state:
+        iv = st.session_state.invalid_values
+        has_invalid = False
+
+        if iv["call_purpose"]:
+            has_invalid = True
+            st.write("### Некорректные цели звонка")
+            replacements_purpose = {}
+            for val in iv["call_purpose"]:
+                c1, c2 = st.columns(2)
+                c1.write(f"`{val}`")
+                replacements_purpose[val] = c2.selectbox(
+                    f"Заменить {val} на:",
+                    options=iv["allowed_purposes"],
+                    key=f"repl_purp_{val}"
+                )
+            if st.button("Применить замены для целей"):
+                for old_v, new_v in replacements_purpose.items():
+                    update_evaluations_value(mapping_prompt_id, 'call_purpose', old_v, new_v)
+                st.success("Значения обновлены!")
+                del st.session_state.invalid_values
+                st.rerun()
+
+        if iv["client_sentiment"]:
+            has_invalid = True
+            st.write("### Некорректные значения настроения")
+            replacements_sentiment = {}
+            for val in iv["client_sentiment"]:
+                c1, c2 = st.columns(2)
+                c1.write(f"`{val}`")
+                replacements_sentiment[val] = c2.selectbox(
+                    f"Заменить {val} на:",
+                    options=iv["allowed_sentiments"],
+                    key=f"repl_sent_{val}"
+                )
+            if st.button("Применить замены для настроения"):
+                for old_v, new_v in replacements_sentiment.items():
+                    update_evaluations_value(mapping_prompt_id, 'client_sentiment', old_v, new_v)
+                st.success("Значения обновлены!")
+                del st.session_state.invalid_values
+                st.rerun()
+
+        if not has_invalid:
+            st.success("Все значения соответствуют настройкам!")
+else:
+    st.info("Добавьте хотя бы один промпт для настройки значений.")
+
+# --- Раздел 5: Телефонный справочник ---
 st.header("Телефонный справочник")
 
 skip_local = get_system_setting('skip_local_calls', 'false').lower() == 'true'
