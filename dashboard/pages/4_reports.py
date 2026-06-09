@@ -142,9 +142,10 @@ def get_report_data(start_date, end_date, prompt_id, filters, agg_col, agg_type,
                 x_sql = "DATE(c.calldate)"
         elif time_res == "Час":
             if is_periodic:
-                x_sql = "LPAD(EXTRACT(HOUR FROM c.calldate)::text, 2, '0') || ':00'"
+                # Экранируем двоеточие для SQLAlchemy, чтобы не считалось за именованный параметр
+                x_sql = "LPAD(EXTRACT(HOUR FROM c.calldate)::text, 2, '0') || '\:00'"
             else:
-                x_sql = "TO_CHAR(c.calldate, 'YYYY-MM-DD HH24:00')"
+                x_sql = "TO_CHAR(c.calldate, 'YYYY-MM-DD HH24\:00')"
         else:
             x_sql = "DATE(c.calldate)"
     else:
