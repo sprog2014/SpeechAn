@@ -30,7 +30,7 @@ def get_engine():
     return create_engine(db_url)
 
 @st.cache_data(ttl=60)
-def get_report_data(start_date, end_date, prompt_id, filters, agg_col, agg_type, y_axis_col, time_toggle, time_res, sort_axis="x_val", sort_dir="ASC"):
+def get_report_data(start_date, end_date, prompt_id, filters, agg_col, agg_type, y_axis_col, time_toggle, time_res, color_col=None, sort_axis="x_val", sort_dir="ASC"):
     engine = get_engine()
 
     # 1. Формируем WHERE
@@ -122,7 +122,11 @@ def get_report_data(start_date, end_date, prompt_id, filters, agg_col, agg_type,
     where_str = " AND ".join(where_clauses)
 
     # 2. Формируем проекцию X-оси
-    x_sql = get_sql_col(agg_col)
+    if agg_col == "hour_of_day":
+        x_sql = "EXTRACT(HOUR FROM c.calldate)"
+    else:
+        x_sql = get_sql_col(agg_col)
+
     if time_toggle:
         if time_res == "День":
             x_sql = "DATE(c.calldate)"
@@ -140,13 +144,20 @@ def get_report_data(start_date, end_date, prompt_id, filters, agg_col, agg_type,
     elif agg_type == "Процент":
         y_sql = "COUNT(*)" # Процент посчитаем в пандасе из долей
 
+    color_select = ""
+    color_group = ""
+    if color_col:
+        color_sql = get_sql_col(color_col)
+        color_select = f", {color_sql} as color_val"
+        color_group = ", 3"
+
     query_agg = f"""
-        SELECT {x_sql} as x_val, {y_sql} as y_val
+        SELECT {x_sql} as x_val, {y_sql} as y_val {color_select}
         FROM calls c
         JOIN evaluations e ON c.linkedid = e.linkedid
         LEFT JOIN phones p ON p.number = (CASE WHEN c.direction = 'incoming' THEN c.answeredext ELSE c.src END)
         WHERE {where_str}
-        GROUP BY 1
+        GROUP BY 1 {color_group}
         ORDER BY {sort_axis} {sort_dir}
     """
 
@@ -281,6 +292,7 @@ with st.sidebar:
             st.session_state.last_prompt_id = s.get('prompt_id')
             st.session_state.viz_settings = {
                 "agg_col": s.get("agg_col"),
+                "color_col": s.get("color_col"),
                 "agg_type": s.get("agg_type"),
                 "y_axis_col": s.get("y_axis_col"),
                 "chart_type": s.get("chart_type"),
@@ -333,6 +345,10 @@ with st.sidebar:
     base_columns = ["direction", "duration", "billsec", "politeness_score", "client_sentiment", "call_purpose", "operator_name", "client_number"]
     all_available_columns = base_columns + json_keys
 
+    # Для X-оси добавим "Час суток"
+    x_axis_columns = ["hour_of_day"] + all_available_columns
+    column_labels["hour_of_day"] = "Час суток (0-23)"
+
     st.subheader("Фильтры")
     if st.button("Добавить фильтр"):
         st.session_state.report_filters.append({"column": all_available_columns[0], "op": "равно", "value": "", "not": False})
@@ -370,9 +386,19 @@ with st.sidebar:
 
     st.subheader("Визуализация")
     saved_agg_col = st.session_state.viz_settings.get("agg_col")
-    agg_col = st.selectbox("Группировка (X-ось)", all_available_columns,
-                           index=all_available_columns.index(saved_agg_col) if saved_agg_col in all_available_columns else (all_available_columns.index("call_purpose") if "call_purpose" in all_available_columns else 0),
+    agg_col = st.selectbox("Группировка (X-ось)", x_axis_columns,
+                           index=x_axis_columns.index(saved_agg_col) if saved_agg_col in x_axis_columns else (x_axis_columns.index("call_purpose") if "call_purpose" in x_axis_columns else 0),
                            format_func=format_col_name)
+
+    saved_color_col = st.session_state.viz_settings.get("color_col")
+    color_options = [None] + all_available_columns
+    def format_color_col(col):
+        if col is None: return "-- Без сегментации --"
+        return format_col_name(col)
+
+    color_col = st.selectbox("Сегментация (Цвет)", color_options,
+                             index=color_options.index(saved_color_col) if saved_color_col in color_options else 0,
+                             format_func=format_color_col)
 
     agg_types = ["Количество", "Сумма", "Среднее", "Процент"]
     saved_agg_type = st.session_state.viz_settings.get("agg_type")
@@ -425,7 +451,7 @@ with st.sidebar:
         st.session_state.applied_settings = {
             "start_date": start_date, "end_date": end_date, "prompt_id": selected_prompt_id,
             "filters": [f.copy() for f in st.session_state.report_filters],
-            "agg_col": agg_col, "agg_type": agg_type, "y_axis_col": y_axis_col,
+            "agg_col": agg_col, "color_col": color_col, "agg_type": agg_type, "y_axis_col": y_axis_col,
             "chart_type": chart_type, "time_toggle": time_toggle, "time_res": time_res,
             "sort_axis": sort_axis, "sort_dir": sort_dir,
             "report_name": st.session_state.active_report_name
@@ -447,7 +473,7 @@ with st.sidebar:
             if st.form_submit_button("Подтвердить"):
                 rep_settings = {
                     "prompt_id": selected_prompt_id, "filters": st.session_state.report_filters,
-                    "agg_col": agg_col, "agg_type": agg_type, "y_axis_col": y_axis_col,
+                    "agg_col": agg_col, "color_col": color_col, "agg_type": agg_type, "y_axis_col": y_axis_col,
                     "chart_type": chart_type, "time_toggle": time_toggle, "time_res": time_res,
                     "sort_axis": sort_axis, "sort_dir": sort_dir
                 }
@@ -474,6 +500,7 @@ try:
         settings["start_date"], settings["end_date"], settings["prompt_id"],
         settings["filters"], settings["agg_col"], settings["agg_type"],
         settings["y_axis_col"], settings["time_toggle"], settings["time_res"],
+        settings.get("color_col"),
         settings.get("sort_axis", "x_val"), settings.get("sort_dir", "ASC")
     )
 except Exception as e:
@@ -490,11 +517,22 @@ else:
     title_prefix = f"Отчет: {settings['report_name']}" if settings.get('report_name') else "Конструктор отчетов"
 
     fig = None
-    labels_map = {'y_val': settings["agg_type"], 'x_val': format_col_name(settings["agg_col"])}
-    if settings["chart_type"] == "bar": fig = px.bar(df_agg, x='x_val', y='y_val', text='y_val', labels=labels_map, custom_data=['x_val'])
-    elif settings["chart_type"] == "line": fig = px.line(df_agg, x='x_val', y='y_val', markers=True, labels=labels_map, custom_data=['x_val'])
-    elif settings["chart_type"] == "pie": fig = px.pie(df_agg, names='x_val', values='y_val', labels=labels_map, custom_data=['x_val'])
-    elif settings["chart_type"] == "area": fig = px.area(df_agg, x='x_val', y='y_val', labels=labels_map, custom_data=['x_val'])
+    labels_map = {
+        'y_val': settings["agg_type"],
+        'x_val': format_col_name(settings["agg_col"]),
+        'color_val': format_col_name(settings.get("color_col")) if settings.get("color_col") else None
+    }
+    color_p = "color_val" if settings.get("color_col") else None
+
+    if settings["chart_type"] == "bar":
+        fig = px.bar(df_agg, x='x_val', y='y_val', color=color_p, text='y_val', labels=labels_map, custom_data=['x_val'])
+    elif settings["chart_type"] == "line":
+        fig = px.line(df_agg, x='x_val', y='y_val', color=color_p, markers=True, labels=labels_map, custom_data=['x_val'])
+    elif settings["chart_type"] == "pie":
+        # Круговая диаграмма со вторым измерением — это сомнительно, но сделаем через 'names'/'values'
+        fig = px.pie(df_agg, names='x_val', values='y_val', labels=labels_map, custom_data=['x_val'])
+    elif settings["chart_type"] == "area":
+        fig = px.area(df_agg, x='x_val', y='y_val', color=color_p, labels=labels_map, custom_data=['x_val'])
 
     st.subheader(f"{title_prefix}: {settings['agg_type']} по {format_col_name(settings['agg_col'])}")
     selected_points = st.plotly_chart(fig, width="stretch", on_select="rerun", key="report_chart")
