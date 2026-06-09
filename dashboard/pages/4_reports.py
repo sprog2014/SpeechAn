@@ -10,7 +10,10 @@ import json
 # Добавляем путь к src, чтобы найти config.py и db_utils.py
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src'))
 from config import PG_CONFIG
-from db_utils import get_all_prompts, get_default_prompt, get_call_file_path, get_call_transcript, format_dialogue
+from db_utils import (
+    get_all_prompts, get_default_prompt, get_call_file_path,
+    get_call_transcript, format_dialogue, get_value_mappings
+)
 
 # Проверка авторизации
 if not st.session_state.get("password_correct", False):
@@ -37,6 +40,26 @@ def get_report_data(start_date, end_date, prompt_id, filters, agg_col, agg_type,
         "end": end_date + timedelta(days=1)
     }
 
+    # Получаем динамические маппинги
+    all_mappings = get_value_mappings()
+    mapping = next((m for m in all_mappings if m['prompt_id'] == prompt_id), None)
+
+    def build_case_sql(column, mapping_list, default_label):
+        if not mapping_list:
+            return f"COALESCE(e.{column}, '{default_label}')"
+        sql = f"CASE e.{column} "
+        for item in mapping_list:
+            for k, v in item.items():
+                k_esc = str(k).replace("'", "''")
+                v_esc = str(v).replace("'", "''")
+                sql += f"WHEN '{k_esc}' THEN '{v_esc}' "
+        default_label_esc = str(default_label).replace("'", "''")
+        sql += f"ELSE COALESCE(e.{column}, '{default_label_esc}') END"
+        return sql
+
+    purpose_sql = build_case_sql('call_purpose', mapping['call_purpose'] if mapping else [], 'Другое')
+    sentiment_sql = build_case_sql('client_sentiment', mapping['client_sentiment'] if mapping else [], 'Не определено')
+
     def get_sql_col(col, as_numeric=False):
         expr = ""
         if col.startswith("checklist."):
@@ -54,6 +77,10 @@ def get_report_data(start_date, end_date, prompt_id, filters, agg_col, agg_type,
             expr = "COALESCE(p.name, CASE WHEN c.direction = 'incoming' THEN c.answeredext ELSE c.src END)"
         elif col == "client_number":
             expr = "CASE WHEN c.direction = 'incoming' THEN c.src ELSE c.answeredext END"
+        elif col == "call_purpose":
+            expr = purpose_sql
+        elif col == "client_sentiment":
+            expr = sentiment_sql
         else:
             expr = f"c.{col}" if col in ["calldate", "direction", "duration", "billsec"] else f"e.{col}"
             if as_numeric and col in ["duration", "billsec", "politeness_score"]:
@@ -141,7 +168,7 @@ def get_report_data(start_date, end_date, prompt_id, filters, agg_col, agg_type,
             c.calldate, c.direction,
             CASE WHEN c.direction = 'incoming' THEN c.src ELSE c.answeredext END as client_number,
             COALESCE(p.name, CASE WHEN c.direction = 'incoming' THEN c.answeredext ELSE c.src END) as operator_name,
-            c.duration, e.call_purpose, e.politeness_score, c.linkedid,
+            c.duration, {purpose_sql} as call_purpose, e.politeness_score, c.linkedid,
             {x_sql} as x_val
         FROM calls c
         JOIN evaluations e ON c.linkedid = e.linkedid
