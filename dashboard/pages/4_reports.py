@@ -122,7 +122,8 @@ def get_report_data(start_date, end_date, prompt_id, filters, agg_col, agg_type,
     where_str = " AND ".join(where_clauses)
 
     # 2. Формируем проекцию X-оси
-    if agg_col == "hour_of_day":
+    if agg_col == "total": x_sql = "'Все данные'"
+    elif agg_col == "hour_of_day":
         x_sql = "EXTRACT(HOUR FROM c.calldate)"
     elif time_toggle:
         if time_res == "День":
@@ -270,7 +271,7 @@ def delete_report(report_id):
 
 # Словарь для отображения имен колонок
 column_labels = {
-    "hour_of_day": "Цикличное время (Час суток 0-23)",
+    "total": "-- Всего --", "hour_of_day": "Цикличное время (Час суток 0-23)",
     "calldate": "Дата и время",
     "direction": "Направление",
     "duration": "Длительность (общая)",
@@ -370,7 +371,7 @@ with st.sidebar:
     all_available_columns = base_columns + json_keys
 
     # Для X-оси добавим "Час суток"
-    x_axis_columns = ["hour_of_day"] + all_available_columns
+    x_axis_columns = ["total", "hour_of_day"] + all_available_columns
 
     st.subheader("Фильтры")
     if st.button("Добавить фильтр"):
@@ -576,6 +577,10 @@ else:
         fig = px.area(df_agg, x='x_val', y='y_val', color=color_p, labels=labels_map, custom_data=['x_val'])
 
     st.subheader(f"{title_prefix}: {settings['agg_type']} по {format_col_name(settings['agg_col'])}")
+
+    # Принудительно делаем ось X категориальной для стабильного стекинга
+    fig.update_xaxes(type='category')
+
     selected_points = st.plotly_chart(fig, width="stretch", on_select="rerun", key="report_chart")
 
     filtered_selection = df_details.copy()
