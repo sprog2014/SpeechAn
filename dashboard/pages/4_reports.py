@@ -29,7 +29,7 @@ def get_engine():
     return create_engine(db_url)
 
 @st.cache_data(ttl=60)
-def get_report_data(start_date, end_date, prompt_id, filters, agg_col, agg_type, y_axis_col, time_toggle, time_res):
+def get_report_data(start_date, end_date, prompt_id, filters, agg_col, agg_type, y_axis_col, time_toggle, time_res, sort_axis="x_val", sort_dir="ASC"):
     engine = get_engine()
 
     # 1. Формируем WHERE
@@ -159,7 +159,7 @@ def get_report_data(start_date, end_date, prompt_id, filters, agg_col, agg_type,
         LEFT JOIN phones p ON p.number = (CASE WHEN c.direction = 'incoming' THEN c.answeredext ELSE c.src END)
         WHERE {where_str}
         GROUP BY 1
-        ORDER BY 1
+        ORDER BY {sort_axis} {sort_dir}
     """
 
     # 4. Запрос для детализации (Лимит 1000 для скорости)
@@ -296,7 +296,9 @@ with st.sidebar:
                 "y_axis_col": s.get("y_axis_col"),
                 "chart_type": s.get("chart_type"),
                 "time_toggle": s.get("time_toggle"),
-                "time_res": s.get("time_res")
+                "time_res": s.get("time_res"),
+                "sort_axis": s.get("sort_axis", "x_val"),
+                "sort_dir": s.get("sort_dir", "ASC")
             }
             st.session_state.active_report_name = selected_report_name
             st.rerun()
@@ -405,7 +407,24 @@ with st.sidebar:
     time_toggle = st.checkbox("Ось времени", value=st.session_state.viz_settings.get("time_toggle", False))
     time_res_options = ["День", "Час"]
     saved_time_res = st.session_state.viz_settings.get("time_res")
-    time_res = st.radio("Детализация", time_res_options, index=time_res_options.index(saved_time_res) if saved_time_res in time_res_options else 0)
+    time_res = st.radio("Детализация", time_res_options, index=time_res_options.index(saved_time_res) if saved_time_res in time_res_options else 0, label_visibility="collapsed")
+
+    st.subheader("Сортировка")
+    c_sort1, c_sort2 = st.columns(2)
+    with c_sort1:
+        sort_axis_options = {"x_val": "Ось X", "y_val": "Ось Y"}
+        saved_sort_axis = st.session_state.viz_settings.get("sort_axis", "x_val")
+        sort_axis = st.radio("По оси", options=list(sort_axis_options.keys()),
+                             format_func=lambda x: sort_axis_options[x],
+                             index=list(sort_axis_options.keys()).index(saved_sort_axis) if saved_sort_axis in sort_axis_options else 0,
+                             label_visibility="collapsed")
+    with c_sort2:
+        sort_dir_options = {"ASC": "⬇️", "DESC": "⬆️"}
+        saved_sort_dir = st.session_state.viz_settings.get("sort_dir", "ASC")
+        sort_dir = st.radio("Направление", options=list(sort_dir_options.keys()),
+                            format_func=lambda x: sort_dir_options[x],
+                            index=list(sort_dir_options.keys()).index(saved_sort_dir) if saved_sort_dir in sort_dir_options else 0,
+                            label_visibility="collapsed")
 
     st.markdown("---")
     if st.button("Применить", type="primary", width="stretch"):
@@ -414,6 +433,7 @@ with st.sidebar:
             "filters": [f.copy() for f in st.session_state.report_filters],
             "agg_col": agg_col, "agg_type": agg_type, "y_axis_col": y_axis_col,
             "chart_type": chart_type, "time_toggle": time_toggle, "time_res": time_res,
+            "sort_axis": sort_axis, "sort_dir": sort_dir,
             "report_name": st.session_state.active_report_name
         }
 
@@ -434,7 +454,8 @@ with st.sidebar:
                 save_report(new_name, {
                     "prompt_id": selected_prompt_id, "filters": st.session_state.report_filters,
                     "agg_col": agg_col, "agg_type": agg_type, "y_axis_col": y_axis_col,
-                    "chart_type": chart_type, "time_toggle": time_toggle, "time_res": time_res
+                    "chart_type": chart_type, "time_toggle": time_toggle, "time_res": time_res,
+                    "sort_axis": sort_axis, "sort_dir": sort_dir
                 })
                 st.session_state.active_report_name = new_name
                 st.session_state.show_save_dialog = False
@@ -450,7 +471,8 @@ try:
     df_agg, df_details = get_report_data(
         settings["start_date"], settings["end_date"], settings["prompt_id"],
         settings["filters"], settings["agg_col"], settings["agg_type"],
-        settings["y_axis_col"], settings["time_toggle"], settings["time_res"]
+        settings["y_axis_col"], settings["time_toggle"], settings["time_res"],
+        settings.get("sort_axis", "x_val"), settings.get("sort_dir", "ASC")
     )
 except Exception as e:
     st.error(f"Ошибка при формировании отчета: {e}")
