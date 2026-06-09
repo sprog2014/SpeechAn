@@ -293,42 +293,57 @@ if prompts:
         iv = st.session_state.invalid_values
         has_invalid = False
 
+        # Вспомогательная функция для отображения меток в выпадающем списке
+        def get_label_map(key_name):
+            items = current_mapping.get(key_name, [])
+            l_map = {}
+            for item in items:
+                for k, v in item.items():
+                    l_map[k] = f"{v} ({k})"
+            return l_map
+
         if iv["call_purpose"]:
             has_invalid = True
             st.write("### Некорректные цели звонка")
             replacements_purpose = {}
+            l_map_purp = get_label_map("call_purpose")
+
             for val in iv["call_purpose"]:
                 c1, c2 = st.columns(2)
                 c1.write(f"`{val}`")
                 replacements_purpose[val] = c2.selectbox(
                     f"Заменить {val} на:",
                     options=iv["allowed_purposes"],
+                    format_func=lambda x: l_map_purp.get(x, x),
                     key=f"repl_purp_{val}"
                 )
             if st.button("Применить замены для целей"):
                 for old_v, new_v in replacements_purpose.items():
                     update_evaluations_value(mapping_prompt_id, 'call_purpose', old_v, new_v)
-                st.success("Значения обновлены!")
-                del st.session_state.invalid_values
+                st.success("Значения целей обновлены!")
+                st.session_state.invalid_values["call_purpose"] = []
                 st.rerun()
 
         if iv["client_sentiment"]:
             has_invalid = True
             st.write("### Некорректные значения настроения")
             replacements_sentiment = {}
+            l_map_sent = get_label_map("client_sentiment")
+
             for val in iv["client_sentiment"]:
                 c1, c2 = st.columns(2)
                 c1.write(f"`{val}`")
                 replacements_sentiment[val] = c2.selectbox(
                     f"Заменить {val} на:",
                     options=iv["allowed_sentiments"],
+                    format_func=lambda x: l_map_sent.get(x, x),
                     key=f"repl_sent_{val}"
                 )
             if st.button("Применить замены для настроения"):
                 for old_v, new_v in replacements_sentiment.items():
                     update_evaluations_value(mapping_prompt_id, 'client_sentiment', old_v, new_v)
-                st.success("Значения обновлены!")
-                del st.session_state.invalid_values
+                st.success("Значения настроения обновлены!")
+                st.session_state.invalid_values["client_sentiment"] = []
                 st.rerun()
 
         if not has_invalid:
