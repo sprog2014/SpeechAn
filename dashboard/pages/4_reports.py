@@ -168,7 +168,8 @@ def get_report_data(start_date, end_date, prompt_id, filters, agg_col, agg_type,
             c.calldate, c.direction,
             CASE WHEN c.direction = 'incoming' THEN c.src ELSE c.answeredext END as client_number,
             COALESCE(p.name, CASE WHEN c.direction = 'incoming' THEN c.answeredext ELSE c.src END) as operator_name,
-            c.duration, {purpose_sql} as call_purpose, e.politeness_score, c.linkedid,
+            c.duration, c.billsec, {purpose_sql} as call_purpose, {sentiment_sql} as client_sentiment,
+            e.politeness_score, e.call_summary, e.checklist_json, c.linkedid,
             {x_sql} as x_val
         FROM calls c
         JOIN evaluations e ON c.linkedid = e.linkedid
@@ -507,12 +508,49 @@ else:
     st.markdown("---")
     st.subheader(f"Список звонков ({len(filtered_selection)})")
 
-    display_df = filtered_selection[['calldate', 'direction', 'client_number', 'operator_name', 'duration', 'call_purpose', 'politeness_score', 'linkedid']].copy()
-    display_df.columns = ['Дата/время', 'Тип', 'Клиент', 'Оператор', 'Длительность', 'Цель', 'Вежливость', 'linkedid']
-    dir_map = {'incoming': '📥', 'inbound': '📥', 'outgoing': '📤', 'outbound': '📤', 'internal': '🏠'}
-    display_df['Тип'] = display_df['Тип'].apply(lambda x: dir_map.get(str(x).lower(), '❓'))
+    def format_mmss(sec):
+        if not sec or sec <= 0: return "00:00"
+        m, s = divmod(int(sec), 60)
+        return f"{m:02d}:{s:02d}"
 
-    event = st.dataframe(display_df, column_config={"Дата/время": st.column_config.DatetimeColumn(format="DD.MM.YYYY HH:mm"), "linkedid": None},
+    def get_flag(c, k):
+        return "✅" if (c and isinstance(c, dict) and c.get(k)) else "❌"
+
+    checklist_keys = [
+        ('greeting', '👋', 'Приветствие'),
+        ('introduced_himself', '🆔', 'Представился'),
+        ('agreed_datetime', '📅', 'Договорился о времени'),
+        ('identified_need', '🎯', 'Выявил потребность'),
+        ('informed_price', '💰', 'Проинформировал о цене'),
+        ('handled_objection', '🛠️', 'Отработал возражение'),
+        ('farewell', '🤝', 'Прощание')
+    ]
+
+    display_df = filtered_selection.copy()
+    dir_map = {'incoming': '📥', 'inbound': '📥', 'outgoing': '📤', 'outbound': '📤', 'internal': '🏠'}
+    display_df['direction'] = display_df['direction'].apply(lambda x: dir_map.get(str(x).lower(), '❓'))
+    display_df['billsec'] = display_df['billsec'].apply(format_mmss)
+
+    for k, icon, label in checklist_keys:
+        display_df[icon] = display_df['checklist_json'].apply(lambda x: get_flag(x, k))
+
+    # Порядок: Дата/Время, Направление, Оператор, Длительность, Цель, Настроение, Суть, показатели
+    cols_to_show = ['calldate', 'direction', 'operator_name', 'billsec', 'call_purpose', 'client_sentiment', 'call_summary'] + [icon for k, icon, label in checklist_keys]
+
+    col_config = {
+        "calldate": st.column_config.DatetimeColumn("Дата/время", format="DD.MM.YYYY HH:mm"),
+        "direction": st.column_config.TextColumn("Напр.", help="Направление"),
+        "operator_name": "Оператор",
+        "billsec": st.column_config.TextColumn("Длит.", help="Длительность разговора"),
+        "call_purpose": "Цель",
+        "client_sentiment": "Настроение",
+        "call_summary": "Суть"
+    }
+    for k, icon, label in checklist_keys:
+        col_config[icon] = st.column_config.TextColumn(icon, help=label)
+
+    event = st.dataframe(display_df[cols_to_show + ['linkedid']],
+                         column_config={**col_config, "linkedid": None},
                          hide_index=True, on_select="rerun", selection_mode="single-row", key="details_table")
 
     if event and event.selection.rows:
