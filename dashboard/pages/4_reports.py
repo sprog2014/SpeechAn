@@ -122,7 +122,8 @@ def get_report_data(start_date, end_date, prompt_id, filters, agg_col, agg_type,
     where_str = " AND ".join(where_clauses)
 
     # 2. Формируем проекцию X-оси
-    if agg_col == "total": x_sql = "'Все данные'"
+    if agg_col == "total":
+        x_sql = "'Все данные'"
     elif agg_col == "day_of_week":
         x_sql = """CASE EXTRACT(DOW FROM c.calldate)
             WHEN 1 THEN '1. Понедельник'
@@ -134,7 +135,8 @@ def get_report_data(start_date, end_date, prompt_id, filters, agg_col, agg_type,
             WHEN 0 THEN '7. Воскресенье'
             ELSE 'Неизвестно' END"""
     elif agg_col == "hour_of_day":
-        x_sql = "EXTRACT(HOUR FROM c.calldate)"
+        # Используем TO_CHAR с ведущим нулем для правильной сортировки, если нужно
+        x_sql = "LPAD(EXTRACT(HOUR FROM c.calldate)::text, 2, '0') || ':00'"
     elif time_toggle:
         if time_res == "День":
             x_sql = "DATE(c.calldate)"
@@ -449,9 +451,9 @@ with st.sidebar:
     chart_type_map = {
         "Столбчатая (Stacked Bar Chart)": "bar_stack",
         "Столбчатая (Grouped Bar Chart)": "bar_group",
-        "Линейная": "line",
-        "Круговая": "pie",
-        "Область": "area"
+        "Линейная (Line Chart)": "line",
+        "Круговая (Pie Chart)": "pie",
+        "Область (Area Chart)": "area"
     }
     saved_chart_type = st.session_state.viz_settings.get("chart_type")
     inv_chart_map = {v: k for k, v in chart_type_map.items()}
@@ -464,10 +466,15 @@ with st.sidebar:
     if chart_type == "bar_group":
         barmode = "group"
 
-    time_toggle = st.checkbox("Ось времени", value=st.session_state.viz_settings.get("time_toggle", False), disabled=(agg_col == "hour_of_day"))
+    # Отключаем линейную ось времени для циклических группировок
+    is_cyclical = agg_col in ["total", "hour_of_day", "day_of_week"]
+    time_toggle = st.checkbox("Ось времени (линейная)", value=st.session_state.viz_settings.get("time_toggle", False) if not is_cyclical else False, disabled=is_cyclical)
+
     time_res_options = ["День", "Час"]
     saved_time_res = st.session_state.viz_settings.get("time_res")
-    time_res = st.radio("Детализация", time_res_options, index=time_res_options.index(saved_time_res) if saved_time_res in time_res_options else 0, label_visibility="collapsed")
+    time_res = st.radio("Детализация времени", time_res_options,
+                        index=time_res_options.index(saved_time_res) if saved_time_res in time_res_options else 0,
+                        label_visibility="collapsed", disabled=not time_toggle)
 
     st.subheader("Сортировка")
     c_sort1, c_sort2 = st.columns(2)
