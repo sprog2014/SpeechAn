@@ -124,14 +124,13 @@ def get_report_data(start_date, end_date, prompt_id, filters, agg_col, agg_type,
     # 2. Формируем проекцию X-оси
     if agg_col == "hour_of_day":
         x_sql = "EXTRACT(HOUR FROM c.calldate)"
-    else:
-        x_sql = get_sql_col(agg_col)
-
-    if time_toggle:
+    elif time_toggle:
         if time_res == "День":
             x_sql = "DATE(c.calldate)"
         else:
             x_sql = "TO_CHAR(c.calldate, 'YYYY-MM-DD HH24:00')"
+    else:
+        x_sql = get_sql_col(agg_col)
 
     # 3. Формируем запрос для графиков (Агрегация на стороне БД)
     y_sql = "*"
@@ -248,6 +247,7 @@ def delete_report(report_id):
 
 # Словарь для отображения имен колонок
 column_labels = {
+    "hour_of_day": "Цикличное время (Час суток 0-23)",
     "calldate": "Дата и время",
     "direction": "Направление",
     "duration": "Длительность (общая)",
@@ -293,6 +293,7 @@ with st.sidebar:
             st.session_state.viz_settings = {
                 "agg_col": s.get("agg_col"),
                 "color_col": s.get("color_col"),
+                "barmode": s.get("barmode", "stack"),
                 "agg_type": s.get("agg_type"),
                 "y_axis_col": s.get("y_axis_col"),
                 "chart_type": s.get("chart_type"),
@@ -347,7 +348,6 @@ with st.sidebar:
 
     # Для X-оси добавим "Час суток"
     x_axis_columns = ["hour_of_day"] + all_available_columns
-    column_labels["hour_of_day"] = "Час суток (0-23)"
 
     st.subheader("Фильтры")
     if st.button("Добавить фильтр"):
@@ -412,14 +412,25 @@ with st.sidebar:
                                   index=y_axis_options.index(saved_y_axis) if saved_y_axis in y_axis_options else 0,
                                   format_func=format_col_name)
 
-    chart_type_map = {"Столбчатая": "bar", "Линейная": "line", "Круговая": "pie", "Область": "area"}
+    chart_type_map = {
+        "Столбчатая (Stacked Bar Chart)": "bar_stack",
+        "Столбчатая (Grouped Bar Chart)": "bar_group",
+        "Линейная": "line",
+        "Круговая": "pie",
+        "Область": "area"
+    }
     saved_chart_type = st.session_state.viz_settings.get("chart_type")
     inv_chart_map = {v: k for k, v in chart_type_map.items()}
-    default_chart_label = inv_chart_map.get(saved_chart_type, "Столбчатая")
+    default_chart_label = inv_chart_map.get(saved_chart_type, "Столбчатая (Stacked Bar Chart)")
     selected_chart_label = st.selectbox("Тип диаграммы", list(chart_type_map.keys()), index=list(chart_type_map.keys()).index(default_chart_label))
     chart_type = chart_type_map[selected_chart_label]
 
-    time_toggle = st.checkbox("Ось времени", value=st.session_state.viz_settings.get("time_toggle", False))
+    # barmode определяется типом диаграммы
+    barmode = "stack"
+    if chart_type == "bar_group":
+        barmode = "group"
+
+    time_toggle = st.checkbox("Ось времени", value=st.session_state.viz_settings.get("time_toggle", False), disabled=(agg_col == "hour_of_day"))
     time_res_options = ["День", "Час"]
     saved_time_res = st.session_state.viz_settings.get("time_res")
     time_res = st.radio("Детализация", time_res_options, index=time_res_options.index(saved_time_res) if saved_time_res in time_res_options else 0, label_visibility="collapsed")
@@ -451,7 +462,7 @@ with st.sidebar:
         st.session_state.applied_settings = {
             "start_date": start_date, "end_date": end_date, "prompt_id": selected_prompt_id,
             "filters": [f.copy() for f in st.session_state.report_filters],
-            "agg_col": agg_col, "color_col": color_col, "agg_type": agg_type, "y_axis_col": y_axis_col,
+            "agg_col": agg_col, "color_col": color_col, "barmode": barmode, "agg_type": agg_type, "y_axis_col": y_axis_col,
             "chart_type": chart_type, "time_toggle": time_toggle, "time_res": time_res,
             "sort_axis": sort_axis, "sort_dir": sort_dir,
             "report_name": st.session_state.active_report_name
@@ -473,7 +484,7 @@ with st.sidebar:
             if st.form_submit_button("Подтвердить"):
                 rep_settings = {
                     "prompt_id": selected_prompt_id, "filters": st.session_state.report_filters,
-                    "agg_col": agg_col, "color_col": color_col, "agg_type": agg_type, "y_axis_col": y_axis_col,
+                    "agg_col": agg_col, "color_col": color_col, "barmode": barmode, "agg_type": agg_type, "y_axis_col": y_axis_col,
                     "chart_type": chart_type, "time_toggle": time_toggle, "time_res": time_res,
                     "sort_axis": sort_axis, "sort_dir": sort_dir
                 }
@@ -524,8 +535,11 @@ else:
     }
     color_p = "color_val" if settings.get("color_col") else None
 
-    if settings["chart_type"] == "bar":
-        fig = px.bar(df_agg, x='x_val', y='y_val', color=color_p, text='y_val', labels=labels_map, custom_data=['x_val'])
+    if settings["chart_type"] in ["bar_stack", "bar_group"]:
+        bm = "stack" if settings["chart_type"] == "bar_stack" else "group"
+        fig = px.bar(df_agg, x='x_val', y='y_val', color=color_p, text='y_val',
+                     barmode=bm,
+                     labels=labels_map, custom_data=['x_val'])
     elif settings["chart_type"] == "line":
         fig = px.line(df_agg, x='x_val', y='y_val', color=color_p, markers=True, labels=labels_map, custom_data=['x_val'])
     elif settings["chart_type"] == "pie":
