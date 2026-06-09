@@ -123,6 +123,16 @@ def get_report_data(start_date, end_date, prompt_id, filters, agg_col, agg_type,
 
     # 2. Формируем проекцию X-оси
     if agg_col == "total": x_sql = "'Все данные'"
+    elif agg_col == "day_of_week":
+        x_sql = """CASE EXTRACT(DOW FROM c.calldate)
+            WHEN 1 THEN '1. Понедельник'
+            WHEN 2 THEN '2. Вторник'
+            WHEN 3 THEN '3. Среда'
+            WHEN 4 THEN '4. Четверг'
+            WHEN 5 THEN '5. Пятница'
+            WHEN 6 THEN '6. Суббота'
+            WHEN 0 THEN '7. Воскресенье'
+            ELSE 'Неизвестно' END"""
     elif agg_col == "hour_of_day":
         x_sql = "EXTRACT(HOUR FROM c.calldate)"
     elif time_toggle:
@@ -271,7 +281,7 @@ def delete_report(report_id):
 
 # Словарь для отображения имен колонок
 column_labels = {
-    "total": "-- Всего --", "hour_of_day": "Цикличное время (Час суток 0-23)",
+    "total": "-- Всего --", "hour_of_day": "Цикличное время (Час суток 0-23)", "day_of_week": "День недели (Пн-Вс)",
     "calldate": "Дата и время",
     "direction": "Направление",
     "duration": "Длительность (общая)",
@@ -371,7 +381,7 @@ with st.sidebar:
     all_available_columns = base_columns + json_keys
 
     # Для X-оси добавим "Час суток"
-    x_axis_columns = ["total", "hour_of_day"] + all_available_columns
+    x_axis_columns = ["total", "hour_of_day", "day_of_week"] + all_available_columns
 
     st.subheader("Фильтры")
     if st.button("Добавить фильтр"):
@@ -561,13 +571,36 @@ else:
 
     if settings["chart_type"] in ["bar_stack", "bar_group"]:
         bm = "stack" if settings["chart_type"] == "bar_stack" else "group"
-        # Приводим к строке, чтобы Plotly не считал ось X непрерывной (числа/даты)
         df_agg['x_val'] = df_agg['x_val'].astype(str)
 
-        fig = px.bar(df_agg, x='x_val', y='y_val', color=color_p, text='y_val',
-                     barmode=bm,
-                     labels=labels_map, custom_data=['x_val'])
-        fig.update_layout(barmode=bm) # Дублируем для надежности
+        if settings["agg_type"] == "Процент" and color_p:
+            if bm == "stack":
+                fig = px.bar(df_agg, x='x_val', y='y_val', color=color_p,
+                             barmode=bm, barnorm='percent',
+                             labels=labels_map, custom_data=['x_val'])
+                fig.update_layout(yaxis_title="Доля (%) внутри категории")
+            else:
+                df_agg['y_val'] = df_agg.groupby('x_val')['y_val'].transform(lambda x: (x / x.sum() * 100).round(2))
+                fig = px.bar(df_agg, x='x_val', y='y_val', color=color_p, text='y_val',
+                             barmode=bm, labels=labels_map, custom_data=['x_val'])
+        else:
+            if settings["agg_type"] == "Процент":
+                total = df_agg['y_val'].sum()
+                df_agg['y_val'] = (df_agg['y_val'] / total * 100).round(2)
+
+            if bm == "stack":
+                fig = px.bar(df_agg, x='x_val', y='y_val', color=color_p,
+                             barmode=bm, labels=labels_map, custom_data=['x_val'])
+                fig.update_traces(texttemplate='%{y}', textposition='inside')
+            else:
+                fig = px.bar(df_agg, x='x_val', y='y_val', color=color_p, text='y_val',
+                             barmode=bm, labels=labels_map, custom_data=['x_val'])
+
+        # ЖЕСТКОЕ ПРАВИЛО ДЛЯ STREAMLIT 1.58.0+:
+        fig.update_layout(
+            barmode=bm,
+            xaxis=dict(type='category')
+        )
     elif settings["chart_type"] == "line":
         fig = px.line(df_agg, x='x_val', y='y_val', color=color_p, markers=True, labels=labels_map, custom_data=['x_val'])
     elif settings["chart_type"] == "pie":
@@ -578,10 +611,13 @@ else:
 
     st.subheader(f"{title_prefix}: {settings['agg_type']} по {format_col_name(settings['agg_col'])}")
 
-    # Принудительно делаем ось X категориальной для стабильного стекинга
-    fig.update_xaxes(type='category')
-
-    selected_points = st.plotly_chart(fig, width="stretch", on_select="rerun", key="report_chart")
+    selected_points = st.plotly_chart(
+        fig,
+        width="stretch",
+        on_select="rerun",
+        key="report_chart",
+        theme=None
+    )
 
     filtered_selection = df_details.copy()
     if selected_points and selected_points.selection.get("points"):
