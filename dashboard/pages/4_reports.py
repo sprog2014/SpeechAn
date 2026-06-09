@@ -122,7 +122,8 @@ def get_report_data(start_date, end_date, prompt_id, filters, agg_col, agg_type,
     where_str = " AND ".join(where_clauses)
 
     # 2. Формируем проекцию X-оси
-    if agg_col == "hour_of_day":
+    if agg_col == "total": x_sql = "'Все данные'"
+    elif agg_col == "hour_of_day":
         x_sql = "EXTRACT(HOUR FROM c.calldate)"
     elif time_toggle:
         if time_res == "День":
@@ -150,15 +151,38 @@ def get_report_data(start_date, end_date, prompt_id, filters, agg_col, agg_type,
         color_select = f", {color_sql} as color_val"
         color_group = ", 3"
 
-    query_agg = f"""
-        SELECT {x_sql} as x_val, {y_sql} as y_val {color_select}
-        FROM calls c
-        JOIN evaluations e ON c.linkedid = e.linkedid
-        LEFT JOIN phones p ON p.number = (CASE WHEN c.direction = 'incoming' THEN c.answeredext ELSE c.src END)
-        WHERE {where_str}
-        GROUP BY 1 {color_group}
-        ORDER BY {sort_axis} {sort_dir}
-    """
+    # Если есть сортировка по Y и сегментация, нам нужно сортировать по сумме всего стека
+    final_sort = f"{sort_axis} {sort_dir}"
+    if sort_axis == "y_val" and color_col:
+        # Используем оконную функцию, чтобы получить сумму всего X-значения для сортировки
+        y_sql_raw = y_sql
+        if agg_type == "Процент": y_sql_raw = "COUNT(*)"
+
+        query_agg = f"""
+            SELECT x_val, y_val {color_select} FROM (
+                SELECT
+                    {x_sql} as x_val,
+                    {y_sql} as y_val
+                    {color_select},
+                    SUM({y_sql_raw}) OVER(PARTITION BY {x_sql}) as total_y
+                FROM calls c
+                JOIN evaluations e ON c.linkedid = e.linkedid
+                LEFT JOIN phones p ON p.number = (CASE WHEN c.direction = 'incoming' THEN c.answeredext ELSE c.src END)
+                WHERE {where_str}
+                GROUP BY 1 {color_group}
+            ) sub
+            ORDER BY total_y {sort_dir}, x_val, color_val
+        """
+    else:
+        query_agg = f"""
+            SELECT {x_sql} as x_val, {y_sql} as y_val {color_select}
+            FROM calls c
+            JOIN evaluations e ON c.linkedid = e.linkedid
+            LEFT JOIN phones p ON p.number = (CASE WHEN c.direction = 'incoming' THEN c.answeredext ELSE c.src END)
+            WHERE {where_str}
+            GROUP BY 1 {color_group}
+            ORDER BY {final_sort}
+        """
 
     # 4. Запрос для детализации (Лимит 1000 для скорости)
     query_details = f"""
@@ -247,7 +271,7 @@ def delete_report(report_id):
 
 # Словарь для отображения имен колонок
 column_labels = {
-    "hour_of_day": "Цикличное время (Час суток 0-23)",
+    "total": "-- Всего --", "hour_of_day": "Цикличное время (Час суток 0-23)",
     "calldate": "Дата и время",
     "direction": "Направление",
     "duration": "Длительность (общая)",
@@ -347,7 +371,7 @@ with st.sidebar:
     all_available_columns = base_columns + json_keys
 
     # Для X-оси добавим "Час суток"
-    x_axis_columns = ["hour_of_day"] + all_available_columns
+    x_axis_columns = ["total", "hour_of_day"] + all_available_columns
 
     st.subheader("Фильтры")
     if st.button("Добавить фильтр"):
@@ -537,9 +561,13 @@ else:
 
     if settings["chart_type"] in ["bar_stack", "bar_group"]:
         bm = "stack" if settings["chart_type"] == "bar_stack" else "group"
+        # Приводим к строке, чтобы Plotly не считал ось X непрерывной (числа/даты)
+        df_agg['x_val'] = df_agg['x_val'].astype(str)
+
         fig = px.bar(df_agg, x='x_val', y='y_val', color=color_p, text='y_val',
                      barmode=bm,
                      labels=labels_map, custom_data=['x_val'])
+        fig.update_layout(barmode=bm) # Дублируем для надежности
     elif settings["chart_type"] == "line":
         fig = px.line(df_agg, x='x_val', y='y_val', color=color_p, markers=True, labels=labels_map, custom_data=['x_val'])
     elif settings["chart_type"] == "pie":
@@ -549,6 +577,10 @@ else:
         fig = px.area(df_agg, x='x_val', y='y_val', color=color_p, labels=labels_map, custom_data=['x_val'])
 
     st.subheader(f"{title_prefix}: {settings['agg_type']} по {format_col_name(settings['agg_col'])}")
+
+    # Принудительно делаем ось X категориальной для стабильного стекинга
+    fig.update_xaxes(type='category')
+
     selected_points = st.plotly_chart(fig, width="stretch", on_select="rerun", key="report_chart")
 
     filtered_selection = df_details.copy()
