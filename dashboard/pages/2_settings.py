@@ -17,8 +17,7 @@ from db_utils import (
     get_pg_connection, get_all_phones, update_phone_use, sync_phones_from_external_db,
     get_system_setting, set_system_setting,
     get_all_tasks, add_task, delete_task,
-    get_value_mappings, set_value_mappings, update_evaluations_value,
-    get_pg_connection
+    get_value_mappings, set_value_mappings, update_evaluations_value
 )
 from config import PG_CONFIG
 

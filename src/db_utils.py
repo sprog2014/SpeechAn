@@ -662,6 +662,26 @@ def format_dialogue(transcript_rows):
         formatted_lines.append(f"{label}: {row['text']}")
     return "\n".join(formatted_lines)
 
+def build_case_sql(column, mapping_list, default_label):
+    """
+    Генерирует SQL CASE для маппинга технических значений в человекочитаемые метки.
+    """
+    if not mapping_list:
+        default_label_esc = str(default_label).replace("'", "''")
+        return f"COALESCE(e.{column}, '{default_label_esc}')"
+
+    sql = f"CASE e.{column} "
+    for item in mapping_list:
+        for k, v in item.items():
+            # Экранируем одинарные кавычки для безопасности SQL
+            k_esc = str(k).replace("'", "''")
+            v_esc = str(v).replace("'", "''")
+            sql += f"WHEN '{k_esc}' THEN '{v_esc}' "
+
+    default_label_esc = str(default_label).replace("'", "''")
+    sql += f"ELSE COALESCE(e.{column}, '{default_label_esc}') END"
+    return sql
+
 def insert_evaluation(linkedid, prompt_id, result_json, conn=None):
     def _execute(c):
         cur = c.cursor()
