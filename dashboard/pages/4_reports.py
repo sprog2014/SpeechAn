@@ -30,7 +30,7 @@ def get_engine():
     return create_engine(db_url)
 
 @st.cache_data(ttl=60)
-def get_report_data(start_date, end_date, prompt_id, filters, agg_col, agg_type, y_axis_col, time_toggle, time_res, color_col=None, sort_axis="x_val", sort_dir="ASC"):
+def get_report_data(start_date, end_date, prompt_id, filters, agg_col, agg_type, y_axis_col, time_toggle, time_res, color_col=None, sort_axis="x_val", sort_dir="ASC", is_periodic=False):
     engine = get_engine()
 
     # 1. Формируем WHERE
@@ -124,24 +124,29 @@ def get_report_data(start_date, end_date, prompt_id, filters, agg_col, agg_type,
     # 2. Формируем проекцию X-оси
     if agg_col == "total":
         x_sql = "'Все данные'"
-    elif agg_col == "day_of_week":
-        x_sql = """CASE EXTRACT(DOW FROM c.calldate)
-            WHEN 1 THEN '1. Понедельник'
-            WHEN 2 THEN '2. Вторник'
-            WHEN 3 THEN '3. Среда'
-            WHEN 4 THEN '4. Четверг'
-            WHEN 5 THEN '5. Пятница'
-            WHEN 6 THEN '6. Суббота'
-            WHEN 0 THEN '7. Воскресенье'
-            ELSE 'Неизвестно' END"""
-    elif agg_col == "hour_of_day":
-        # Используем TO_CHAR с ведущим нулем для правильной сортировки, если нужно
-        x_sql = "LPAD(EXTRACT(HOUR FROM c.calldate)::text, 2, '0') || ':00'"
     elif time_toggle:
         if time_res == "День":
             x_sql = "DATE(c.calldate)"
+        elif time_res == "День недели":
+            if is_periodic:
+                x_sql = """CASE EXTRACT(DOW FROM c.calldate)
+                    WHEN 1 THEN '1. Понедельник'
+                    WHEN 2 THEN '2. Вторник'
+                    WHEN 3 THEN '3. Среда'
+                    WHEN 4 THEN '4. Четверг'
+                    WHEN 5 THEN '5. Пятница'
+                    WHEN 6 THEN '6. Суббота'
+                    WHEN 0 THEN '7. Воскресенье'
+                    ELSE 'Неизвестно' END"""
+            else:
+                x_sql = "DATE(c.calldate)"
+        elif time_res == "Час":
+            if is_periodic:
+                x_sql = "LPAD(EXTRACT(HOUR FROM c.calldate)::text, 2, '0') || ':00'"
+            else:
+                x_sql = "TO_CHAR(c.calldate, 'YYYY-MM-DD HH24:00')"
         else:
-            x_sql = "TO_CHAR(c.calldate, 'YYYY-MM-DD HH24:00')"
+            x_sql = "DATE(c.calldate)"
     else:
         x_sql = get_sql_col(agg_col)
 
@@ -283,7 +288,7 @@ def delete_report(report_id):
 
 # Словарь для отображения имен колонок
 column_labels = {
-    "total": "-- Всего --", "hour_of_day": "Цикличное время (Час суток 0-23)", "day_of_week": "День недели (Пн-Вс)",
+    "total": "-- Всего --",
     "calldate": "Дата и время",
     "direction": "Направление",
     "duration": "Длительность (общая)",
@@ -335,6 +340,7 @@ with st.sidebar:
                 "chart_type": s.get("chart_type"),
                 "time_toggle": s.get("time_toggle"),
                 "time_res": s.get("time_res"),
+                "is_periodic": s.get("is_periodic", False),
                 "sort_axis": s.get("sort_axis", "x_val"),
                 "sort_dir": s.get("sort_dir", "ASC")
             }
@@ -382,8 +388,8 @@ with st.sidebar:
     base_columns = ["direction", "duration", "billsec", "politeness_score", "client_sentiment", "call_purpose", "operator_name", "client_number"]
     all_available_columns = base_columns + json_keys
 
-    # Для X-оси добавим "Час суток"
-    x_axis_columns = ["total", "hour_of_day", "day_of_week"] + all_available_columns
+    # Для X-оси
+    x_axis_columns = ["total"] + all_available_columns
 
     st.subheader("Фильтры")
     if st.button("Добавить фильтр"):
@@ -466,15 +472,19 @@ with st.sidebar:
     if chart_type == "bar_group":
         barmode = "group"
 
-    # Отключаем линейную ось времени для циклических группировок
-    is_cyclical = agg_col in ["total", "hour_of_day", "day_of_week"]
-    time_toggle = st.checkbox("Ось времени (линейная)", value=st.session_state.viz_settings.get("time_toggle", False) if not is_cyclical else False, disabled=is_cyclical)
+    # Отключаем ось времени для 'total'
+    is_total = agg_col == "total"
+    time_toggle = st.checkbox("Ось времени", value=st.session_state.viz_settings.get("time_toggle", False) if not is_total else False, disabled=is_total)
 
-    time_res_options = ["День", "Час"]
+    time_res_options = ["День", "День недели", "Час"]
     saved_time_res = st.session_state.viz_settings.get("time_res")
     time_res = st.radio("Детализация времени", time_res_options,
                         index=time_res_options.index(saved_time_res) if saved_time_res in time_res_options else 0,
                         label_visibility="collapsed", disabled=not time_toggle)
+
+    is_periodic = st.checkbox("Периодически",
+                              value=st.session_state.viz_settings.get("is_periodic", False),
+                              disabled=not time_toggle or time_res == "День")
 
     st.subheader("Сортировка")
     c_sort1, c_sort2 = st.columns(2)
@@ -504,7 +514,7 @@ with st.sidebar:
             "start_date": start_date, "end_date": end_date, "prompt_id": selected_prompt_id,
             "filters": [f.copy() for f in st.session_state.report_filters],
             "agg_col": agg_col, "color_col": color_col, "barmode": barmode, "agg_type": agg_type, "y_axis_col": y_axis_col,
-            "chart_type": chart_type, "time_toggle": time_toggle, "time_res": time_res,
+            "chart_type": chart_type, "time_toggle": time_toggle, "time_res": time_res, "is_periodic": is_periodic,
             "sort_axis": sort_axis, "sort_dir": sort_dir,
             "report_name": st.session_state.active_report_name
         }
@@ -526,7 +536,7 @@ with st.sidebar:
                 rep_settings = {
                     "prompt_id": selected_prompt_id, "filters": st.session_state.report_filters,
                     "agg_col": agg_col, "color_col": color_col, "barmode": barmode, "agg_type": agg_type, "y_axis_col": y_axis_col,
-                    "chart_type": chart_type, "time_toggle": time_toggle, "time_res": time_res,
+                    "chart_type": chart_type, "time_toggle": time_toggle, "time_res": time_res, "is_periodic": is_periodic,
                     "sort_axis": sort_axis, "sort_dir": sort_dir
                 }
                 save_report(new_name, rep_settings)
@@ -553,7 +563,8 @@ try:
         settings["filters"], settings["agg_col"], settings["agg_type"],
         settings["y_axis_col"], settings["time_toggle"], settings["time_res"],
         settings.get("color_col"),
-        settings.get("sort_axis", "x_val"), settings.get("sort_dir", "ASC")
+        settings.get("sort_axis", "x_val"), settings.get("sort_dir", "ASC"),
+        is_periodic=settings.get("is_periodic", False)
     )
 except Exception as e:
     st.error(f"Ошибка при формировании отчета: {e}")
