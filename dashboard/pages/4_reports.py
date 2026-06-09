@@ -674,12 +674,13 @@ else:
     for k, icon, label in checklist_keys:
         display_df[icon] = display_df['checklist_json'].apply(lambda x: get_flag(x, k))
 
-    # Порядок: Дата/Время, Направление, Оператор, Длительность, Цель, Настроение, Суть, показатели
-    cols_to_show = ['calldate', 'direction', 'operator_name', 'billsec', 'call_purpose', 'client_sentiment', 'call_summary'] + [icon for k, icon, label in checklist_keys]
+    # Порядок: Дата/Время, Направление, Номер клиента, Оператор, Длительность, Цель, Настроение, Суть, показатели
+    cols_to_show = ['calldate', 'direction', 'client_number', 'operator_name', 'billsec', 'call_purpose', 'client_sentiment', 'call_summary'] + [icon for k, icon, label in checklist_keys]
 
     col_config = {
         "calldate": st.column_config.DatetimeColumn("Дата/время", format="DD.MM.YYYY HH:mm"),
         "direction": st.column_config.TextColumn("Напр.", help="Направление"),
+        "client_number": "Номер клиента",
         "operator_name": "Оператор",
         "billsec": st.column_config.TextColumn("Длит.", help="Длительность разговора"),
         "call_purpose": "Цель",
