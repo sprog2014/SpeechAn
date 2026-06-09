@@ -16,6 +16,10 @@ logger = logging.getLogger(__name__)
 _asr_model = None
 _asr_lock = threading.Lock()
 
+_vad_model = None
+_vad_utils = None
+_vad_lock = threading.Lock()
+
 _llm_model = None
 _llm_tokenizer = None
 _llm_lock = threading.Lock()
@@ -33,6 +37,25 @@ def get_asr_model():
                 logger.error(f"Failed to load GigaAM ASR model: {e}")
                 raise
     return _asr_model
+
+def get_vad_model():
+    global _vad_model, _vad_utils
+    with _vad_lock:
+        if _vad_model is None:
+            logger.info("Initializing Silero VAD model...")
+            try:
+                model, utils = torch.hub.load(repo_or_dir='snakers4/silero-vad',
+                                              model='silero_vad',
+                                              force_reload=False,
+                                              onnx=False,
+                                              trust_repo=True)
+                _vad_model = model
+                _vad_utils = utils
+                logger.info("Silero VAD model loaded successfully")
+            except Exception as e:
+                logger.error(f"Failed to load Silero VAD model: {e}")
+                raise
+    return _vad_model, _vad_utils
 
 class OpenVINOLLM:
     def __init__(self, model, tokenizer):

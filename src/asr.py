@@ -2,7 +2,7 @@ import logging
 import time
 import torch
 import torchaudio
-from models import get_asr_model
+from models import get_asr_model, get_vad_model
 
 logger = logging.getLogger(__name__)
 
@@ -28,58 +28,24 @@ def transcribe_audio(waveform: torch.Tensor, sample_rate: int = 16000):
             return decoded_list[0][0].strip()
     return ""
 
-def get_speech_segments(waveform: torch.Tensor, sample_rate: int = 16000,
-                        threshold: float = 0.5, min_silence_duration: float = 0.5):
+def get_speech_segments(waveform: torch.Tensor, sample_rate: int = 16000):
     """
-    Использует torchaudio.transforms.Vad для обнаружения фрагментов речи в канале.
+    Использует Silero VAD для обнаружения фрагментов речи в канале.
     Возвращает список (start_sec, end_sec).
     """
-    # torchaudio.transforms.Vad работает в реальном времени,
-    # для оффлайн анализа мы можем использовать более простые методы или GigaAM VAD если есть.
-    # Но так как просили "нарезать в момент появления голоса", попробуем простой энергетический VAD.
+    model, utils = get_vad_model()
+    (get_speech_timestamps, _, _, _, _) = utils
 
-    # 1. Считаем энергию
-    window_size = int(0.03 * sample_rate) # 30ms
-    hop_size = int(0.01 * sample_rate)   # 10ms
-
-    # [samples] -> [windows, window_size]
-    unfolded = waveform.unfold(0, window_size, hop_size)
-    # Считаем RMS для каждого окна
-    rms = torch.sqrt(torch.mean(unfolded**2, dim=1))
-
-    # Нормализуем RMS
-    if rms.max() > 0:
-        rms = rms / rms.max()
-
-    # Пороговое значение (можно настраивать)
-    is_speech = rms > 0.02 # Очень базовый порог
+    # Silero VAD ожидает тензор [batch, samples] или [samples]
+    # И определенные частоты дискретизации (8000 или 16000)
+    with torch.no_grad():
+        speech_timestamps = get_speech_timestamps(waveform, model, sampling_rate=sample_rate)
 
     segments = []
-    in_speech = False
-    start_frame = 0
-
-    min_silence_frames = int(min_silence_duration / (hop_size / sample_rate))
-    silence_counter = 0
-
-    for i, active in enumerate(is_speech):
-        if active:
-            if not in_speech:
-                in_speech = True
-                start_frame = i
-            silence_counter = 0
-        else:
-            if in_speech:
-                silence_counter += 1
-                if silence_counter >= min_silence_frames:
-                    in_speech = False
-                    end_frame = i - silence_counter
-                    # Переводим в секунды
-                    segments.append((start_frame * hop_size / sample_rate,
-                                     end_frame * hop_size / sample_rate))
-
-    if in_speech:
-        segments.append((start_frame * hop_size / sample_rate,
-                         len(rms) * hop_size / sample_rate))
+    for ts in speech_timestamps:
+        start_sec = ts['start'] / sample_rate
+        end_sec = ts['end'] / sample_rate
+        segments.append((start_sec, end_sec))
 
     # Склеиваем слишком короткие или близкие сегменты и ограничиваем по 25с
     refined_segments = []
