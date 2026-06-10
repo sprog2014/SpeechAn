@@ -96,12 +96,16 @@ if st.session_state.show_editor:
         if check_btn:
             st.session_state.test_transcript = test_transcript
             if text:
-                with st.spinner("Проверка промпта..."):
-                    try:
-                        result = check_prompt(text, test_transcript)
-                        st.session_state.check_result = result
-                    except Exception as e:
-                        st.error(f"Ошибка при проверке: {e}")
+                try:
+                    stream = check_prompt(text, test_transcript, stream=True)
+                    placeholder = st.empty()
+                    full_response = ""
+                    for chunk in stream:
+                        full_response += chunk
+                        placeholder.text_area("Ответ LLM (в процессе...)", value=full_response, height=200, disabled=True)
+                    st.session_state.check_result = full_response
+                except Exception as e:
+                    st.error(f"Ошибка при проверке: {e}")
             else:
                 st.error("Текст промпта не может быть пустым.")
             st.rerun()

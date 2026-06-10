@@ -4,7 +4,7 @@ import logging
 import warnings
 import gigaam
 import torch
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, TextIteratorStreamer
 from optimum.intel.openvino import OVModelForCausalLM
 
 # Подавляем FutureWarning от torch/gigaam
@@ -62,7 +62,7 @@ class OpenVINOLLM:
         self.model = model
         self.tokenizer = tokenizer
 
-    def create_chat_completion(self, messages, max_tokens=1000, temperature=0.1, **kwargs):
+    def create_chat_completion(self, messages, max_tokens=1000, temperature=0.1, stream=False, **kwargs):
         # Эмулируем интерфейс llama-cpp для минимизации правок в вызывающем коде
         prompt = self.tokenizer.apply_chat_template(
             messages,
@@ -70,6 +70,21 @@ class OpenVINOLLM:
             add_generation_prompt=True
         )
         inputs = self.tokenizer(prompt, return_tensors="pt")
+
+        if stream:
+            streamer = TextIteratorStreamer(self.tokenizer, skip_prompt=True, skip_special_tokens=True)
+            generation_kwargs = dict(
+                **inputs,
+                streamer=streamer,
+                max_new_tokens=max_tokens,
+                do_sample=temperature > 0,
+                temperature=temperature if temperature > 0 else 1.0,
+                top_p=0.9,
+                pad_token_id=self.tokenizer.eos_token_id
+            )
+            thread = threading.Thread(target=self.model.generate, kwargs=generation_kwargs)
+            thread.start()
+            return streamer
 
         output_ids = self.model.generate(
             **inputs,
