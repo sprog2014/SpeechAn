@@ -64,51 +64,49 @@ if st.session_state.show_editor:
     prompt = st.session_state.editing_prompt
     p_id = prompt['id'] if prompt else None
 
-    with st.form("edit_prompt_form"):
-        name = st.text_input("Название", value=prompt['name'] if prompt else "")
+    # Убираем st.form, так как он мешает поточному выводу в реальном времени
+    name = st.text_input("Название", value=prompt['name'] if prompt else "")
 
-        col_text1, col_text2 = st.columns(2)
-        text = col_text1.text_area("Текст промпта", value=prompt['prompt_text'] if prompt else "", height=300)
-        test_transcript = col_text2.text_area("Тестовый транскрипт", value=st.session_state.test_transcript, height=300)
+    col_text1, col_text2 = st.columns(2)
+    text = col_text1.text_area("Текст промпта", value=prompt['prompt_text'] if prompt else "", height=300)
+    # Сохраняем транскрипт в session_state
+    st.session_state.test_transcript = col_text2.text_area("Тестовый транскрипт", value=st.session_state.test_transcript, height=300)
 
-        col_f1, col_f2, col_f3, col_f4 = st.columns([1, 1, 1, 1])
-        save_btn = col_f1.form_submit_button("Сохранить")
-        cancel_btn = col_f2.form_submit_button("Отмена")
-        check_btn = col_f3.form_submit_button("Проверить")
+    col_f1, col_f2, col_f3, col_f4 = st.columns([1, 1, 1, 1])
+    save_btn = col_f1.button("Сохранить", width='stretch')
+    cancel_btn = col_f2.button("Отмена", width='stretch')
+    check_btn = col_f3.button("Проверить", width='stretch')
 
-        if save_btn:
-            if name and text:
-                upsert_prompt(name, text, is_default=prompt['is_default'] if prompt else False, prompt_id=p_id)
-                st.success("Сохранено!")
-                st.session_state.show_editor = False
-                st.session_state.editing_prompt = None
-                st.session_state.check_result = None
-                st.rerun()
-            else:
-                st.error("Название и текст не могут быть пустыми.")
-
-        if cancel_btn:
+    if save_btn:
+        if name and text:
+            upsert_prompt(name, text, is_default=prompt['is_default'] if prompt else False, prompt_id=p_id)
+            st.success("Сохранено!")
             st.session_state.show_editor = False
             st.session_state.editing_prompt = None
             st.session_state.check_result = None
             st.rerun()
+        else:
+            st.error("Название и текст не могут быть пустыми.")
 
-        if check_btn:
-            st.session_state.test_transcript = test_transcript
-            if text:
+    if cancel_btn:
+        st.session_state.show_editor = False
+        st.session_state.editing_prompt = None
+        st.session_state.check_result = None
+        st.rerun()
+
+    if check_btn:
+        if text:
+            with st.status("Выполняется анализ...", expanded=True) as status:
                 try:
-                    stream = check_prompt(text, test_transcript, stream=True)
-                    placeholder = st.empty()
-                    full_response = ""
-                    for chunk in stream:
-                        full_response += chunk
-                        placeholder.text_area("Ответ LLM (в процессе...)", value=full_response, height=200, disabled=True)
+                    full_response = st.write_stream(check_prompt(text, st.session_state.test_transcript, stream=True))
                     st.session_state.check_result = full_response
+                    status.update(label="Анализ завершен!", state="complete", expanded=False)
+                    st.rerun() # Перезапускаем, чтобы показать результат в финальном поле ниже
                 except Exception as e:
+                    status.update(label="Ошибка!", state="error")
                     st.error(f"Ошибка при проверке: {e}")
-            else:
-                st.error("Текст промпта не может быть пустым.")
-            st.rerun()
+        else:
+            st.error("Текст промпта не может быть пустым.")
 
     if st.session_state.check_result:
         st.subheader("Результат проверки")

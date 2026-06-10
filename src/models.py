@@ -83,6 +83,7 @@ class OpenVINOLLM:
                 pad_token_id=self.tokenizer.eos_token_id
             )
             thread = threading.Thread(target=self.model.generate, kwargs=generation_kwargs)
+            logger.info("Starting LLM generation thread for streaming...")
             thread.start()
             return streamer
 
