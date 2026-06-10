@@ -19,6 +19,7 @@ from db_utils import (
     get_all_tasks, add_task, delete_task,
     get_value_mappings, set_value_mappings, update_evaluations_value
 )
+from llm_analysis import check_prompt
 from config import PG_CONFIG
 
 if not st.session_state.get("password_correct", False):
@@ -51,6 +52,10 @@ if "show_editor" not in st.session_state:
     st.session_state.show_editor = False
 if "editing_prompt" not in st.session_state:
     st.session_state.editing_prompt = None
+if "test_transcript" not in st.session_state:
+    st.session_state.test_transcript = ""
+if "check_result" not in st.session_state:
+    st.session_state.check_result = None
 
 prompts = get_all_prompts()
 
@@ -61,11 +66,15 @@ if st.session_state.show_editor:
 
     with st.form("edit_prompt_form"):
         name = st.text_input("Название", value=prompt['name'] if prompt else "")
-        text = st.text_area("Текст промпта", value=prompt['prompt_text'] if prompt else "", height=300)
 
-        col_f1, col_f2 = st.columns(2)
+        col_text1, col_text2 = st.columns(2)
+        text = col_text1.text_area("Текст промпта", value=prompt['prompt_text'] if prompt else "", height=300)
+        test_transcript = col_text2.text_area("Тестовый транскрипт", value=st.session_state.test_transcript, height=300)
+
+        col_f1, col_f2, col_f3, col_f4 = st.columns([1, 1, 1, 1])
         save_btn = col_f1.form_submit_button("Сохранить")
         cancel_btn = col_f2.form_submit_button("Отмена")
+        check_btn = col_f3.form_submit_button("Проверить")
 
         if save_btn:
             if name and text:
@@ -73,6 +82,7 @@ if st.session_state.show_editor:
                 st.success("Сохранено!")
                 st.session_state.show_editor = False
                 st.session_state.editing_prompt = None
+                st.session_state.check_result = None
                 st.rerun()
             else:
                 st.error("Название и текст не могут быть пустыми.")
@@ -80,7 +90,25 @@ if st.session_state.show_editor:
         if cancel_btn:
             st.session_state.show_editor = False
             st.session_state.editing_prompt = None
+            st.session_state.check_result = None
             st.rerun()
+
+        if check_btn:
+            st.session_state.test_transcript = test_transcript
+            if text:
+                with st.spinner("Проверка промпта..."):
+                    try:
+                        result = check_prompt(text, test_transcript)
+                        st.session_state.check_result = result
+                    except Exception as e:
+                        st.error(f"Ошибка при проверке: {e}")
+            else:
+                st.error("Текст промпта не может быть пустым.")
+            st.rerun()
+
+    if st.session_state.check_result:
+        st.subheader("Результат проверки")
+        st.text_area("Ответ LLM", value=st.session_state.check_result, height=200, disabled=True)
 else:
     if prompts:
         display_data = []
@@ -114,11 +142,13 @@ else:
         if col1.button("Добавить новый", width='stretch'):
             st.session_state.show_editor = True
             st.session_state.editing_prompt = None
+            st.session_state.check_result = None
             st.rerun()
 
         if col2.button("Изменить выбранный", width='stretch', disabled=selected_prompt is None):
             st.session_state.show_editor = True
             st.session_state.editing_prompt = selected_prompt
+            st.session_state.check_result = None
             st.rerun()
 
         if col3.button("Сделать по умолчанию", width='stretch', disabled=selected_prompt is None):
@@ -136,6 +166,7 @@ else:
         if st.button("Добавить первый промпт"):
             st.session_state.show_editor = True
             st.session_state.editing_prompt = None
+            st.session_state.check_result = None
             st.rerun()
 
 # --- Раздел 3: Задания на анализ (вместо Ручного запуска) ---

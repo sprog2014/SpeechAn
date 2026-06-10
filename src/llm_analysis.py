@@ -103,3 +103,31 @@ def analyze_transcript(transcript_text: str, prompt_template: str = None) -> dic
 
     logger.info(f"LLM score: {result.get('politeness_score')}, sentiment: {result.get('client_sentiment')}")
     return result
+
+def check_prompt(prompt_template: str, transcript_text: str) -> str:
+    """Отправляет промпт на проверку без системного промпта и возвращает сырой текст."""
+    start_time = time.time()
+    logger.info("Checking prompt via LLM...")
+
+    llm = get_locked_llm()
+
+    user_message = prompt_template.replace("{transcript}", transcript_text)
+
+    messages = [
+        {"role": "user", "content": user_message}
+    ]
+
+    try:
+        output = llm.create_chat_completion(
+            messages=messages,
+            max_tokens=1000,
+            temperature=0.1
+        )
+        response = output['choices'][0]['message']['content']
+    except Exception as e:
+        logger.error(f"Error during LLM prompt check: {e}")
+        raise
+
+    duration = time.time() - start_time
+    logger.info(f"LLM check finished in {duration:.2f}s")
+    return response
