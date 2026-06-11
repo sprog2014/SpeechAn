@@ -177,7 +177,7 @@ def get_report_data(start_date, end_date, prompt_id, filters, agg_col, agg_type,
         if agg_type == "Процент": y_sql_raw = "COUNT(*)"
 
         query_agg = f"""
-            SELECT x_val, y_val {color_select} FROM (
+            SELECT x_val, y_val, color_val FROM (
                 SELECT
                     {x_sql} as x_val,
                     {y_sql} as y_val
