@@ -111,6 +111,49 @@ def upsert_call(metadata, file_path, conn=None):
         with get_pg_connection() as conn:
             _execute(conn)
 
+def save_asr_metrics(linkedid, metrics, conn=None):
+    """
+    Сохраняет метрики ASR (чёткость, скорость) во временное хранилище (system_settings).
+    """
+    key = f"asr_metrics_{linkedid}"
+    value = json.dumps(metrics, ensure_ascii=False)
+    def _execute(c):
+        cur = c.cursor()
+        cur.execute("""
+            INSERT INTO system_settings (key, value)
+            VALUES (%s, %s)
+            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+        """, (key, value))
+        c.commit()
+
+    if conn:
+        _execute(conn)
+    else:
+        with get_pg_connection() as conn:
+            _execute(conn)
+
+def get_asr_metrics(linkedid, conn=None):
+    """
+    Получает сохраненные метрики ASR для указанного linkedid.
+    """
+    key = f"asr_metrics_{linkedid}"
+    def _execute(c):
+        cur = c.cursor()
+        cur.execute("SELECT value FROM system_settings WHERE key = %s", (key,))
+        row = cur.fetchone()
+        if row:
+            try:
+                return json.loads(row[0])
+            except:
+                return None
+        return None
+
+    if conn:
+        return _execute(conn)
+    else:
+        with get_pg_connection() as conn:
+            return _execute(conn)
+
 def get_all_tasks(conn=None):
     def _execute(c):
         cur = c.cursor(cursor_factory=RealDictCursor)
