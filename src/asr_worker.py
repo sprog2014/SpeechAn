@@ -84,8 +84,8 @@ def process_asr(file_path: str):
                 insert_processing_stats(linkedid, duration, 0, duration, conn=pg_conn)
                 return True
 
-            for start, end, channel, text in combined_segments:
-                insert_transcript(linkedid, channel, start, end, text, conn=pg_conn)
+            for start, end, channel, text, dict_score, speed in combined_segments:
+                insert_transcript(linkedid, channel, start, end, text, diction=dict_score, wpm=speed, conn=pg_conn)
 
             duration = time.time() - start_time
             from db_utils import insert_processing_stats

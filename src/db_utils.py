@@ -111,6 +111,45 @@ def upsert_call(metadata, file_path, conn=None):
         with get_pg_connection() as conn:
             _execute(conn)
 
+def get_aggregated_asr_metrics(linkedid, conn=None):
+    """
+    Вычисляет среднюю четкость и темп речи для оператора и клиента на основе данных из таблицы транскрибации.
+    """
+    def _execute(c):
+        cur = c.cursor(cursor_factory=RealDictCursor)
+        cur.execute("""
+            SELECT
+                channel,
+                AVG(diction) as avg_diction,
+                AVG(wpm) as avg_wpm
+            FROM transcripts
+            WHERE linkedid = %s AND diction IS NOT NULL AND wpm IS NOT NULL
+            GROUP BY channel
+        """, (linkedid,))
+        rows = cur.fetchall()
+
+        metrics = {
+            "operator_diction": 0.0,
+            "operator_wpm": 0,
+            "client_diction": 0.0,
+            "client_wpm": 0
+        }
+
+        for row in rows:
+            if row['channel'] == 'operator':
+                metrics["operator_diction"] = round(float(row['avg_diction']), 1) if row['avg_diction'] else 0.0
+                metrics["operator_wpm"] = int(row['avg_wpm']) if row['avg_wpm'] else 0
+            elif row['channel'] == 'client':
+                metrics["client_diction"] = round(float(row['avg_diction']), 1) if row['avg_diction'] else 0.0
+                metrics["client_wpm"] = int(row['avg_wpm']) if row['avg_wpm'] else 0
+        return metrics
+
+    if conn:
+        return _execute(conn)
+    else:
+        with get_pg_connection() as conn:
+            return _execute(conn)
+
 def get_all_tasks(conn=None):
     def _execute(c):
         cur = c.cursor(cursor_factory=RealDictCursor)
@@ -555,14 +594,14 @@ def set_call_done(linkedid, conn=None):
 def set_call_error(linkedid, conn=None):
     set_call_status(linkedid, 'error', conn)
 
-def insert_transcript(linkedid, channel, start, end, text, conn=None):
+def insert_transcript(linkedid, channel, start, end, text, diction=None, wpm=None, conn=None):
     def _execute(c):
         cur = c.cursor()
         cur.execute("""
-            INSERT INTO transcripts (linkedid, channel, start_time, end_time, text)
-            VALUES (%s, %s, %s, %s, %s)
+            INSERT INTO transcripts (linkedid, channel, start_time, end_time, text, diction, wpm)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             RETURNING id
-        """, (linkedid, channel, start, end, text))
+        """, (linkedid, channel, start, end, text, diction, wpm))
         tid = cur.fetchone()[0]
         c.commit()
         return tid
