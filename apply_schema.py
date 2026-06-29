@@ -62,6 +62,19 @@ def apply_schema_updates():
         cur.execute("CREATE INDEX IF NOT EXISTS idx_evals_checklist_gin ON evaluations USING GIN (checklist_json);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_evals_metrics_gin ON evaluations USING GIN (metrics_json);")
 
+        print("Adding diction and wpm columns to transcripts if they do not exist...")
+        cur.execute("""
+            DO $$
+            BEGIN
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='transcripts' AND column_name='diction') THEN
+                    ALTER TABLE transcripts ADD COLUMN diction NUMERIC(5,2);
+                END IF;
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='transcripts' AND column_name='wpm') THEN
+                    ALTER TABLE transcripts ADD COLUMN wpm INT;
+                END IF;
+            END $$;
+        """)
+
         conn.commit()
         cur.close()
         conn.close()

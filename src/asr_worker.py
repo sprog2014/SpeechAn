@@ -5,7 +5,7 @@ import torchaudio
 import time
 from db_utils import (
     fetch_call_metadata, upsert_call, insert_transcript, get_pg_connection,
-    check_transcript_exists, set_call_status, get_call_status, save_asr_metrics
+    check_transcript_exists, set_call_status, get_call_status
 )
 from asr import transcribe_with_vad
 from logging_utils import setup_logging
@@ -84,30 +84,8 @@ def process_asr(file_path: str):
                 insert_processing_stats(linkedid, duration, 0, duration, conn=pg_conn)
                 return True
 
-            # Агрегация метрик
-            metrics_acc = {
-                'operator': {'diction_sum': 0.0, 'words': 0, 'duration': 0.0, 'chunks': 0},
-                'client': {'diction_sum': 0.0, 'words': 0, 'duration': 0.0, 'chunks': 0}
-            }
-
             for start, end, channel, text, dict_score, speed in combined_segments:
-                insert_transcript(linkedid, channel, start, end, text, conn=pg_conn)
-
-                acc = metrics_acc.get(channel)
-                if acc is not None:
-                    acc['diction_sum'] += dict_score
-                    acc['words'] += len(text.split())
-                    acc['duration'] += (end - start)
-                    acc['chunks'] += 1
-
-            # Расчет и сохранение финальных метрик
-            final_metrics = {
-                "operator_diction": round(metrics_acc['operator']['diction_sum'] / metrics_acc['operator']['chunks'], 1) if metrics_acc['operator']['chunks'] > 0 else 0.0,
-                "operator_wpm": int((metrics_acc['operator']['words'] / metrics_acc['operator']['duration']) * 60) if metrics_acc['operator']['duration'] > 0 else 0,
-                "client_diction": round(metrics_acc['client']['diction_sum'] / metrics_acc['client']['chunks'], 1) if metrics_acc['client']['chunks'] > 0 else 0.0,
-                "client_wpm": int((metrics_acc['client']['words'] / metrics_acc['client']['duration']) * 60) if metrics_acc['client']['duration'] > 0 else 0
-            }
-            save_asr_metrics(linkedid, final_metrics, conn=pg_conn)
+                insert_transcript(linkedid, channel, start, end, text, diction=dict_score, wpm=speed, conn=pg_conn)
 
             duration = time.time() - start_time
             from db_utils import insert_processing_stats

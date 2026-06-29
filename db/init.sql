@@ -35,7 +35,9 @@ CREATE TABLE transcripts (
     start_time  NUMERIC(8,3),
     end_time    NUMERIC(8,3),
     text        TEXT NOT NULL,
-    language    TEXT DEFAULT 'ru'
+    language    TEXT DEFAULT 'ru',
+    diction     NUMERIC(5,2),
+    wpm         INT
 );
 CREATE INDEX idx_transcripts_linkedid ON transcripts(linkedid);
 

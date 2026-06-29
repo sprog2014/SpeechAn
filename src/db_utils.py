@@ -111,42 +111,38 @@ def upsert_call(metadata, file_path, conn=None):
         with get_pg_connection() as conn:
             _execute(conn)
 
-def save_asr_metrics(linkedid, metrics, conn=None):
+def get_aggregated_asr_metrics(linkedid, conn=None):
     """
-    Сохраняет метрики ASR (чёткость, скорость) во временное хранилище (system_settings).
+    Вычисляет среднюю четкость и темп речи для оператора и клиента на основе данных из таблицы транскрибации.
     """
-    key = f"asr_metrics_{linkedid}"
-    value = json.dumps(metrics, ensure_ascii=False)
     def _execute(c):
-        cur = c.cursor()
+        cur = c.cursor(cursor_factory=RealDictCursor)
         cur.execute("""
-            INSERT INTO system_settings (key, value)
-            VALUES (%s, %s)
-            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
-        """, (key, value))
-        c.commit()
+            SELECT
+                channel,
+                AVG(diction) as avg_diction,
+                AVG(wpm) as avg_wpm
+            FROM transcripts
+            WHERE linkedid = %s AND diction IS NOT NULL AND wpm IS NOT NULL
+            GROUP BY channel
+        """, (linkedid,))
+        rows = cur.fetchall()
 
-    if conn:
-        _execute(conn)
-    else:
-        with get_pg_connection() as conn:
-            _execute(conn)
+        metrics = {
+            "operator_diction": 0.0,
+            "operator_wpm": 0,
+            "client_diction": 0.0,
+            "client_wpm": 0
+        }
 
-def get_asr_metrics(linkedid, conn=None):
-    """
-    Получает сохраненные метрики ASR для указанного linkedid.
-    """
-    key = f"asr_metrics_{linkedid}"
-    def _execute(c):
-        cur = c.cursor()
-        cur.execute("SELECT value FROM system_settings WHERE key = %s", (key,))
-        row = cur.fetchone()
-        if row:
-            try:
-                return json.loads(row[0])
-            except:
-                return None
-        return None
+        for row in rows:
+            if row['channel'] == 'operator':
+                metrics["operator_diction"] = round(float(row['avg_diction']), 1) if row['avg_diction'] else 0.0
+                metrics["operator_wpm"] = int(row['avg_wpm']) if row['avg_wpm'] else 0
+            elif row['channel'] == 'client':
+                metrics["client_diction"] = round(float(row['avg_diction']), 1) if row['avg_diction'] else 0.0
+                metrics["client_wpm"] = int(row['avg_wpm']) if row['avg_wpm'] else 0
+        return metrics
 
     if conn:
         return _execute(conn)
@@ -598,14 +594,14 @@ def set_call_done(linkedid, conn=None):
 def set_call_error(linkedid, conn=None):
     set_call_status(linkedid, 'error', conn)
 
-def insert_transcript(linkedid, channel, start, end, text, conn=None):
+def insert_transcript(linkedid, channel, start, end, text, diction=None, wpm=None, conn=None):
     def _execute(c):
         cur = c.cursor()
         cur.execute("""
-            INSERT INTO transcripts (linkedid, channel, start_time, end_time, text)
-            VALUES (%s, %s, %s, %s, %s)
+            INSERT INTO transcripts (linkedid, channel, start_time, end_time, text, diction, wpm)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             RETURNING id
-        """, (linkedid, channel, start, end, text))
+        """, (linkedid, channel, start, end, text, diction, wpm))
         tid = cur.fetchone()[0]
         c.commit()
         return tid
