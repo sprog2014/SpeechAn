@@ -143,9 +143,9 @@ def get_report_data(start_date, end_date, prompt_id, filters, agg_col, agg_type,
         elif time_res == "Час":
             if is_periodic:
                 # Экранируем двоеточие для SQLAlchemy, чтобы не считалось за именованный параметр
-                x_sql = "LPAD(EXTRACT(HOUR FROM c.calldate)::text, 2, '0') || '\:00'"
+                x_sql = r"LPAD(EXTRACT(HOUR FROM c.calldate)::text, 2, '0') || '\:00'"
             else:
-                x_sql = "TO_CHAR(c.calldate, 'YYYY-MM-DD HH24\:00')"
+                x_sql = r"TO_CHAR(c.calldate, 'YYYY-MM-DD HH24\:00')"
         else:
             x_sql = "DATE(c.calldate)"
     else:
@@ -172,9 +172,19 @@ def get_report_data(start_date, end_date, prompt_id, filters, agg_col, agg_type,
     # Если есть сортировка по Y и сегментация, нам нужно сортировать по сумме всего стека
     final_sort = f"{sort_axis} {sort_dir}"
     if sort_axis == "y_val" and color_col:
-        # Используем оконную функцию, чтобы получить сумму всего X-значения для сортировки
-        y_sql_raw = y_sql
-        if agg_type == "Процент": y_sql_raw = "COUNT(*)"
+        # Используем оконную функцию, чтобы получить общую величину всего X-значения для сортировки
+        if agg_type == "Среднее":
+            # Для среднего по группе X мы считаем взвешенное среднее по всем сегментам
+            col_num = get_sql_col(y_axis_col, as_numeric=True)
+            y_sort_expr = f"SUM(SUM({col_num})) OVER(PARTITION BY {x_sql}) / NULLIF(SUM(COUNT({col_num})) OVER(PARTITION BY {x_sql}), 0)"
+        elif agg_type == "Процент":
+            y_sort_expr = f"SUM(COUNT(*)) OVER(PARTITION BY {x_sql})"
+        elif agg_type == "Сумма":
+            col_num = get_sql_col(y_axis_col, as_numeric=True)
+            y_sort_expr = f"SUM(SUM({col_num})) OVER(PARTITION BY {x_sql})"
+        else:
+            # Количество
+            y_sort_expr = f"SUM(COUNT(*)) OVER(PARTITION BY {x_sql})"
 
         query_agg = f"""
             SELECT x_val, y_val {color_select} FROM (
@@ -182,7 +192,7 @@ def get_report_data(start_date, end_date, prompt_id, filters, agg_col, agg_type,
                     {x_sql} as x_val,
                     {y_sql} as y_val
                     {color_select},
-                    SUM({y_sql_raw}) OVER(PARTITION BY {x_sql}) as total_y
+                    {y_sort_expr} as total_y
                 FROM calls c
                 JOIN evaluations e ON c.linkedid = e.linkedid
                 LEFT JOIN phones p ON p.number = (CASE WHEN c.direction = 'incoming' THEN c.answeredext ELSE c.src END)
@@ -574,10 +584,6 @@ except Exception as e:
 if df_agg.empty:
     st.info("Данные не найдены.")
 else:
-    if settings["agg_type"] == "Процент":
-        total = df_agg['y_val'].sum()
-        df_agg['y_val'] = (df_agg['y_val'] / total * 100).round(2)
-
     title_prefix = f"Отчет: {settings['report_name']}" if settings.get('report_name') else "Конструктор отчетов"
 
     fig = None
@@ -590,23 +596,50 @@ else:
 
     if settings["chart_type"] in ["bar_stack", "bar_group"]:
         bm = "stack" if settings["chart_type"] == "bar_stack" else "group"
-        df_agg['x_val'] = df_agg['x_val'].astype(str)
 
-        if settings["agg_type"] == "Процент" and color_p:
-            if bm == "stack":
-                fig = px.bar(df_agg, x='x_val', y='y_val', color=color_p,
-                             barmode=bm, barnorm='percent',
-                             labels=labels_map, custom_data=['x_val'])
-                fig.update_layout(yaxis_title="Доля (%) внутри категории")
-            else:
-                df_agg['y_val'] = df_agg.groupby('x_val')['y_val'].transform(lambda x: (x / x.sum() * 100).round(2))
-                fig = px.bar(df_agg, x='x_val', y='y_val', color=color_p, text='y_val',
-                             barmode=bm, labels=labels_map, custom_data=['x_val'])
+        # Подготовка данных для корректного стекирования
+        df_agg['x_val'] = df_agg['x_val'].astype(str).str.strip()
+        if color_p:
+            df_agg[color_p] = df_agg[color_p].fillna("Не определено").astype(str).str.strip()
+
+        # Дополнительная агрегация на стороне Pandas для предотвращения дублей (x_val, color_val)
+        # которые могут ломать стекирование в Plotly
+        group_cols = ['x_val']
+        if color_p:
+            group_cols.append(color_p)
+
+        if settings["agg_type"] == "Среднее":
+            # Для среднего по группе нам нужно знать количество и сумму,
+            # но так как мы уже получили агрегаты из БД,
+            # мы просто берем среднее от средних (если вдруг есть дубли)
+            df_agg = df_agg.groupby(group_cols, as_index=False)['y_val'].mean()
         else:
-            if settings["agg_type"] == "Процент":
-                total = df_agg['y_val'].sum()
-                df_agg['y_val'] = (df_agg['y_val'] / total * 100).round(2)
+            df_agg = df_agg.groupby(group_cols, as_index=False)['y_val'].sum()
 
+        if settings["agg_type"] == "Процент":
+            if color_p:
+                if bm == "stack":
+                    # Для стекируемых процентов нормализуем на 100% внутри каждого столбца
+                    fig = px.bar(df_agg, x='x_val', y='y_val', color=color_p,
+                                 barmode=bm,
+                                 labels=labels_map, custom_data=['x_val'])
+                    fig.update_layout(yaxis_title="Доля (%) внутри категории", barnorm='percent')
+                else:
+                    # Для группированных - считаем процент внутри категории X
+                    df_agg['y_val'] = df_agg.groupby('x_val', group_keys=False)['y_val'].apply(lambda x: (x / x.sum() * 100).round(2))
+                    fig = px.bar(df_agg, x='x_val', y='y_val', color=color_p, text='y_val',
+                                 barmode=bm, labels=labels_map, custom_data=['x_val'])
+                    fig.update_layout(yaxis_title="Доля (%) внутри категории")
+            else:
+                # Если сегментации нет - процент от общего итога
+                total = df_agg['y_val'].sum()
+                if total > 0:
+                    df_agg['y_val'] = (df_agg['y_val'] / total * 100).round(2)
+                fig = px.bar(df_agg, x='x_val', y='y_val', text='y_val',
+                             barmode=bm, labels=labels_map, custom_data=['x_val'])
+                fig.update_layout(yaxis_title="Доля (%) от общего итога")
+        else:
+            # Обычные значения (Количество, Сумма, Среднее)
             if bm == "stack":
                 fig = px.bar(df_agg, x='x_val', y='y_val', color=color_p,
                              barmode=bm, labels=labels_map, custom_data=['x_val'])
