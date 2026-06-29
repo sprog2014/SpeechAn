@@ -217,6 +217,7 @@ def get_report_data(start_date, end_date, prompt_id, filters, agg_col, agg_type,
         """
 
     # 4. Запрос для детализации (Лимит 1000 для скорости)
+    color_detail = f", {get_sql_col(color_col)} as color_val" if color_col else ""
     query_details = f"""
         SELECT
             c.calldate, c.direction,
@@ -224,7 +225,7 @@ def get_report_data(start_date, end_date, prompt_id, filters, agg_col, agg_type,
             COALESCE(p.name, CASE WHEN c.direction = 'incoming' THEN c.answeredext ELSE c.src END) as operator_name,
             c.duration, c.billsec, {purpose_sql} as call_purpose, {sentiment_sql} as client_sentiment,
             e.politeness_score, e.call_summary, e.checklist_json, c.linkedid,
-            {x_sql} as x_val
+            {x_sql} as x_val {color_detail}
         FROM calls c
         JOIN evaluations e ON c.linkedid = e.linkedid
         LEFT JOIN phones p ON p.number = (CASE WHEN c.direction = 'incoming' THEN c.answeredext ELSE c.src END)
@@ -612,6 +613,7 @@ else:
         'color_val': format_col_name(settings.get("color_col")) if settings.get("color_col") else None
     }
     color_p = "color_val" if settings.get("color_col") else None
+    cd_cols = ['x_val', 'color_val'] if color_p else ['x_val']
 
     # Общая предобработка данных для всех типов графиков
     df_agg['x_val'] = df_agg['x_val'].fillna("Не определено").astype(str).str.strip()
@@ -652,13 +654,13 @@ else:
                     # Для стекируемых процентов нормализуем на 100% внутри каждого столбца
                     fig = px.bar(df_agg, x='x_val', y='y_val', color=color_p,
                                  barmode=bm,
-                                 labels=labels_map, custom_data=['x_val'])
+                             labels=labels_map, custom_data=cd_cols)
                     fig.update_layout(yaxis_title="Доля (%) внутри категории", barnorm='percent')
                 else:
                     # Для группированных - считаем процент внутри категории X
                     df_agg['y_val'] = df_agg.groupby('x_val', group_keys=False, sort=False)['y_val'].apply(lambda x: (x / x.sum() * 100).round(2))
                     fig = px.bar(df_agg, x='x_val', y='y_val', color=color_p, text='y_val',
-                                 barmode=bm, labels=labels_map, custom_data=['x_val'])
+                                 barmode=bm, labels=labels_map, custom_data=cd_cols)
                     fig.update_layout(yaxis_title="Доля (%) внутри категории")
             else:
                 # Если сегментации нет - процент от общего итога
@@ -666,7 +668,7 @@ else:
                 if total > 0:
                     df_agg['y_val'] = (df_agg['y_val'] / total * 100).round(2)
                 fig = px.bar(df_agg, x='x_val', y='y_val', text='y_val',
-                             barmode=bm, labels=labels_map, custom_data=['x_val'])
+                             barmode=bm, labels=labels_map, custom_data=cd_cols)
                 fig.update_layout(yaxis_title="Доля (%) от общего итога")
         else:
             # Обычные значения (Количество, Сумма, Среднее)
@@ -679,14 +681,14 @@ else:
 
             if bm == "stack":
                 fig = px.bar(df_agg, x='x_val', y='y_val', color=color_p,
-                             barmode=bm, labels=labels_map, custom_data=['x_val'])
+                             barmode=bm, labels=labels_map, custom_data=cd_cols)
 
                 # Если Y это булево значение и мы не в режиме процента, можно попробовать подменить текст
                 # Но обычно на Y-оси при агрегации (Сумма/Среднее) получаются дробные числа или суммы > 1
                 fig.update_traces(texttemplate='%{y}', textposition='inside')
             else:
                 fig = px.bar(df_agg, x='x_val', y='y_val', color=color_p, text='y_val',
-                             barmode=bm, labels=labels_map, custom_data=['x_val'])
+                             barmode=bm, labels=labels_map, custom_data=cd_cols)
 
         # ЖЕСТКОЕ ПРАВИЛО ДЛЯ STREAMLIT 1.58.0+:
         fig.update_layout(
@@ -697,12 +699,12 @@ else:
         if bm == 'stack':
             fig.update_traces(offsetgroup=0)
     elif settings["chart_type"] == "line":
-        fig = px.line(df_agg, x='x_val', y='y_val', color=color_p, markers=True, labels=labels_map, custom_data=['x_val'])
+        fig = px.line(df_agg, x='x_val', y='y_val', color=color_p, markers=True, labels=labels_map, custom_data=cd_cols)
     elif settings["chart_type"] == "pie":
         # Круговая диаграмма со вторым измерением — это сомнительно, но сделаем через 'names'/'values'
-        fig = px.pie(df_agg, names='x_val', values='y_val', labels=labels_map, custom_data=['x_val'])
+        fig = px.pie(df_agg, names='x_val', values='y_val', labels=labels_map, custom_data=cd_cols)
     elif settings["chart_type"] == "area":
-        fig = px.area(df_agg, x='x_val', y='y_val', color=color_p, labels=labels_map, custom_data=['x_val'])
+        fig = px.area(df_agg, x='x_val', y='y_val', color=color_p, labels=labels_map, custom_data=cd_cols)
         fig.update_layout(xaxis=dict(type='category', categoryorder='trace'))
 
     st.subheader(f"{title_prefix}: {settings['agg_type']} по {format_col_name(settings['agg_col'])}")
@@ -718,9 +720,32 @@ else:
     filtered_selection = df_details.copy()
     if selected_points and selected_points.selection.get("points"):
         point = selected_points.selection["points"][0]
-        val = point.get("x") or point.get("label") or (point.get("customdata", [None])[0])
-        if val is not None:
-            filtered_selection = filtered_selection[filtered_selection['x_val'].astype(str) == str(val)]
+
+        # Извлекаем данные из customdata для точной фильтрации
+        custom_data = point.get("customdata", [None, None])
+        x_val = custom_data[0]
+        color_val = custom_data[1] if len(custom_data) > 1 else None
+
+        if x_val is not None:
+            filtered_selection = filtered_selection[filtered_selection['x_val'].astype(str) == str(x_val)]
+
+        if color_val is not None:
+            # Для color_val мы также применяли маппинг ДА/НЕТ,
+            # поэтому при фильтрации нужно быть внимательными.
+            # В df_details color_val — это исходное значение из БД.
+            # Но для согласованности мы можем применить тот же маппинг к df_details перед фильтрацией
+            # или использовать обратный маппинг.
+            # Проще всего привести обе стороны к строке и сравнить.
+
+            # Предварительно обработаем df_details['color_val'] так же, как df_agg
+            temp_color = filtered_selection['color_val'].fillna("Не определено").astype(str).str.strip()
+
+            # Применяем маппинг ДА/НЕТ к деталям для корректного сравнения с выбранным сегментом
+            if settings["color_col"] and (settings["color_col"].startswith("checklist.") or settings["color_col"].startswith("metrics.")):
+                bool_map = {'1': 'ДА', '1.0': 'ДА', 'true': 'ДА', '0': 'НЕТ', '0.0': 'НЕТ', 'false': 'НЕТ'}
+                temp_color = temp_color.map(lambda x: bool_map.get(str(x).lower(), x))
+
+            filtered_selection = filtered_selection[temp_color == str(color_val)]
 
     st.markdown("---")
     st.subheader(f"Список звонков ({len(filtered_selection)})")
