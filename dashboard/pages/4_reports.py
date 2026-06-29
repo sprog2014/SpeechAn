@@ -60,7 +60,8 @@ def get_report_data(start_date, end_date, prompt_id, filters, agg_col, agg_type,
             key = col.split('.')[1]
             expr = f"e.metrics_json->>'{key}'"
             if as_numeric:
-                expr = f"({expr})::numeric"
+                # Обрабатываем как числа, так и булевы значения (true/false -> 1/0)
+                expr = f"CASE WHEN {expr} = 'true' THEN 1 WHEN {expr} = 'false' THEN 0 ELSE ({expr})::numeric END"
         elif col == "operator_name":
             expr = "COALESCE(p.name, CASE WHEN c.direction = 'incoming' THEN c.answeredext ELSE c.src END)"
         elif col == "client_number":
@@ -264,16 +265,27 @@ def get_distinct_values(prompt_id, column):
         df = pd.read_sql(text(query), conn, params={"pid": prompt_id})
     return sorted([str(x) for x in df['val'].tolist()])
 
-def get_sample_record(prompt_id):
+def get_report_json_keys(prompt_id):
     engine = get_engine()
     with engine.connect() as conn:
+        # Берем 50 последних записей для более полного охвата ключей
         res = conn.execute(text("""
             SELECT checklist_json, metrics_json
             FROM evaluations
             WHERE prompt_id = :pid
-            LIMIT 1
-        """), {"pid": prompt_id}).fetchone()
-        return res
+            ORDER BY linkedid DESC
+            LIMIT 50
+        """), {"pid": prompt_id}).fetchall()
+
+        checklist_keys = set()
+        metrics_keys = set()
+        for row in res:
+            if row[0] and isinstance(row[0], dict):
+                checklist_keys.update(row[0].keys())
+            if row[1] and isinstance(row[1], dict):
+                metrics_keys.update(row[1].keys())
+
+        return sorted([f"checklist.{k}" for k in checklist_keys]) + sorted([f"metrics.{k}" for k in metrics_keys])
 
 def get_saved_reports():
     engine = get_engine()
@@ -391,12 +403,7 @@ with st.sidebar:
         st.session_state.last_prompt_id = selected_prompt_id
 
     # Получаем ключи JSON
-    sample = get_sample_record(selected_prompt_id)
-    json_keys = []
-    if sample:
-        checklist = sample[0] if isinstance(sample[0], dict) else {}
-        metrics = sample[1] if isinstance(sample[1], dict) else {}
-        json_keys = [f"checklist.{k}" for k in checklist.keys()] + [f"metrics.{k}" for k in metrics.keys()]
+    json_keys = get_report_json_keys(selected_prompt_id)
 
     base_columns = ["direction", "duration", "billsec", "politeness_score", "client_sentiment", "call_purpose", "operator_name", "client_number"]
     all_available_columns = base_columns + json_keys
