@@ -186,8 +186,10 @@ def get_report_data(start_date, end_date, prompt_id, filters, agg_col, agg_type,
             # Количество
             y_sort_expr = f"SUM(COUNT(*)) OVER(PARTITION BY {x_sql})"
 
+        # Внешний SELECT должен использовать алиасы из подзапроса
+        outer_color = ", color_val" if color_col else ""
         query_agg = f"""
-            SELECT x_val, y_val {color_select} FROM (
+            SELECT x_val, y_val {outer_color} FROM (
                 SELECT
                     {x_sql} as x_val,
                     {y_sql} as y_val
@@ -594,27 +596,24 @@ else:
     }
     color_p = "color_val" if settings.get("color_col") else None
 
+    # Общая предобработка данных для всех типов графиков
+    df_agg['x_val'] = df_agg['x_val'].fillna("Не определено").astype(str).str.strip()
+    if color_p:
+        df_agg[color_p] = df_agg[color_p].fillna("Не определено").astype(str).str.strip()
+
+    # Гарантируем уникальность пар (x_val, color_val) и заполняем пустоты нулями для правильного стекирования
+    group_cols = ['x_val']
+    if color_p: group_cols.append(color_p)
+
+    if settings["agg_type"] == "Среднее":
+        df_agg = df_agg.groupby(group_cols, as_index=False)['y_val'].mean()
+    else:
+        df_agg = df_agg.groupby(group_cols, as_index=False)['y_val'].sum()
+
+    df_agg['y_val'] = df_agg['y_val'].fillna(0)
+
     if settings["chart_type"] in ["bar_stack", "bar_group"]:
         bm = "stack" if settings["chart_type"] == "bar_stack" else "group"
-
-        # Подготовка данных для корректного стекирования
-        df_agg['x_val'] = df_agg['x_val'].astype(str).str.strip()
-        if color_p:
-            df_agg[color_p] = df_agg[color_p].fillna("Не определено").astype(str).str.strip()
-
-        # Дополнительная агрегация на стороне Pandas для предотвращения дублей (x_val, color_val)
-        # которые могут ломать стекирование в Plotly
-        group_cols = ['x_val']
-        if color_p:
-            group_cols.append(color_p)
-
-        if settings["agg_type"] == "Среднее":
-            # Для среднего по группе нам нужно знать количество и сумму,
-            # но так как мы уже получили агрегаты из БД,
-            # мы просто берем среднее от средних (если вдруг есть дубли)
-            df_agg = df_agg.groupby(group_cols, as_index=False)['y_val'].mean()
-        else:
-            df_agg = df_agg.groupby(group_cols, as_index=False)['y_val'].sum()
 
         if settings["agg_type"] == "Процент":
             if color_p:
@@ -651,8 +650,11 @@ else:
         # ЖЕСТКОЕ ПРАВИЛО ДЛЯ STREAMLIT 1.58.0+:
         fig.update_layout(
             barmode=bm,
-            xaxis=dict(type='category')
+            xaxis=dict(type='category', categoryorder='trace')
         )
+        # Если это стекируемый график, принудительно объединяем в одну группу смещения
+        if bm == 'stack':
+            fig.update_traces(offsetgroup=0)
     elif settings["chart_type"] == "line":
         fig = px.line(df_agg, x='x_val', y='y_val', color=color_p, markers=True, labels=labels_map, custom_data=['x_val'])
     elif settings["chart_type"] == "pie":
@@ -660,6 +662,7 @@ else:
         fig = px.pie(df_agg, names='x_val', values='y_val', labels=labels_map, custom_data=['x_val'])
     elif settings["chart_type"] == "area":
         fig = px.area(df_agg, x='x_val', y='y_val', color=color_p, labels=labels_map, custom_data=['x_val'])
+        fig.update_layout(xaxis=dict(type='category', categoryorder='trace'))
 
     st.subheader(f"{title_prefix}: {settings['agg_type']} по {format_col_name(settings['agg_col'])}")
 
