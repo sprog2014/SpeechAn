@@ -627,9 +627,10 @@ else:
     if color_p: group_cols.append(color_p)
 
     if settings["agg_type"] == "Среднее":
-        df_agg = df_agg.groupby(group_cols, as_index=False)['y_val'].mean()
+        # Используем sort=False чтобы сохранить порядок сортировки из БД
+        df_agg = df_agg.groupby(group_cols, as_index=False, sort=False)['y_val'].mean()
     else:
-        df_agg = df_agg.groupby(group_cols, as_index=False)['y_val'].sum()
+        df_agg = df_agg.groupby(group_cols, as_index=False, sort=False)['y_val'].sum()
 
     df_agg['y_val'] = df_agg['y_val'].fillna(0)
 
@@ -655,7 +656,7 @@ else:
                     fig.update_layout(yaxis_title="Доля (%) внутри категории", barnorm='percent')
                 else:
                     # Для группированных - считаем процент внутри категории X
-                    df_agg['y_val'] = df_agg.groupby('x_val', group_keys=False)['y_val'].apply(lambda x: (x / x.sum() * 100).round(2))
+                    df_agg['y_val'] = df_agg.groupby('x_val', group_keys=False, sort=False)['y_val'].apply(lambda x: (x / x.sum() * 100).round(2))
                     fig = px.bar(df_agg, x='x_val', y='y_val', color=color_p, text='y_val',
                                  barmode=bm, labels=labels_map, custom_data=['x_val'])
                     fig.update_layout(yaxis_title="Доля (%) внутри категории")
