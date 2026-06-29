@@ -128,7 +128,7 @@ def get_report_data(start_date, end_date, prompt_id, filters, agg_col, agg_type,
         x_sql = "'Все данные'"
     elif time_toggle:
         if time_res == "День":
-            x_sql = "DATE(c.calldate)"
+            x_sql = "TO_CHAR(c.calldate, 'YYYY-MM-DD')"
         elif time_res == "День недели":
             if is_periodic:
                 x_sql = """CASE EXTRACT(DOW FROM c.calldate)
@@ -141,7 +141,12 @@ def get_report_data(start_date, end_date, prompt_id, filters, agg_col, agg_type,
                     WHEN 0 THEN '7. Воскресенье'
                     ELSE 'Неизвестно' END"""
             else:
-                x_sql = "DATE(c.calldate)"
+                # Для непериодического дня недели выводим "YYYY-MM-DD (День недели)" для правильной сортировки и читаемости
+                x_sql = """TO_CHAR(c.calldate, 'YYYY-MM-DD') || ' (' ||
+                    CASE EXTRACT(DOW FROM c.calldate)
+                    WHEN 1 THEN 'Пн' WHEN 2 THEN 'Вт' WHEN 3 THEN 'Ср'
+                    WHEN 4 THEN 'Чт' WHEN 5 THEN 'Пт' WHEN 6 THEN 'Сб'
+                    WHEN 0 THEN 'Вс' ELSE '?' END || ')'"""
         elif time_res == "Час":
             if is_periodic:
                 # Экранируем двоеточие для SQLAlchemy, чтобы не считалось за именованный параметр
@@ -149,7 +154,7 @@ def get_report_data(start_date, end_date, prompt_id, filters, agg_col, agg_type,
             else:
                 x_sql = r"TO_CHAR(c.calldate, 'YYYY-MM-DD HH24\:00')"
         else:
-            x_sql = "DATE(c.calldate)"
+            x_sql = "TO_CHAR(c.calldate, 'YYYY-MM-DD')"
     else:
         x_sql = get_sql_col(agg_col)
 
@@ -505,7 +510,13 @@ with st.sidebar:
 
     # Отключаем ось времени для 'total'
     is_total = agg_col == "total"
-    time_toggle = st.checkbox("Ось времени", value=st.session_state.viz_settings.get("time_toggle", False) if not is_total else False, disabled=is_total)
+    prev_time_toggle = st.session_state.viz_settings.get("time_toggle", False)
+    time_toggle = st.checkbox("Ось времени", value=prev_time_toggle if not is_total else False, disabled=is_total)
+
+    # Если включили ось времени — по умолчанию ставим сортировку по X (хронологически)
+    if time_toggle and not prev_time_toggle:
+        st.session_state.viz_settings["sort_axis"] = "x_val"
+        st.session_state.viz_settings["sort_dir"] = "ASC"
 
     time_res_options = ["День", "День недели", "Час"]
     saved_time_res = st.session_state.viz_settings.get("time_res")
@@ -530,7 +541,7 @@ with st.sidebar:
                              key=f"sort_axis_radio_{selected_report_name}",
                              label_visibility="collapsed")
     with c_sort2:
-        sort_dir_options = {"ASC": "⬇️", "DESC": "⬆️"}
+        sort_dir_options = {"ASC": "⬆️", "DESC": "⬇️"}
         saved_sort_dir = st.session_state.viz_settings.get("sort_dir", "ASC")
         dir_idx = list(sort_dir_options.keys()).index(saved_sort_dir) if saved_sort_dir in sort_dir_options else 0
         sort_dir = st.radio("Направление", options=list(sort_dir_options.keys()),
