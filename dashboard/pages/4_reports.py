@@ -186,8 +186,10 @@ def get_report_data(start_date, end_date, prompt_id, filters, agg_col, agg_type,
             # Количество
             y_sort_expr = f"SUM(COUNT(*)) OVER(PARTITION BY {x_sql})"
 
+        # Внешний SELECT должен использовать алиасы из подзапроса
+        outer_color = ", color_val" if color_col else ""
         query_agg = f"""
-            SELECT x_val, y_val {color_select} FROM (
+            SELECT x_val, y_val {outer_color} FROM (
                 SELECT
                     {x_sql} as x_val,
                     {y_sql} as y_val
