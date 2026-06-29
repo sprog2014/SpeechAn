@@ -61,7 +61,8 @@ def get_report_data(start_date, end_date, prompt_id, filters, agg_col, agg_type,
             expr = f"e.metrics_json->>'{key}'"
             if as_numeric:
                 # Обрабатываем как числа, так и булевы значения (true/false -> 1/0)
-                expr = f"CASE WHEN {expr} = 'true' THEN 1 WHEN {expr} = 'false' THEN 0 ELSE ({expr})::numeric END"
+                # Оборачиваем в COALESCE для корректной работы агрегатных функций если ключа нет
+                expr = f"CASE WHEN {expr} = 'true' THEN 1 WHEN {expr} = 'false' THEN 0 ELSE COALESCE(({expr})::numeric, 0) END"
         elif col == "operator_name":
             expr = "COALESCE(p.name, CASE WHEN c.direction = 'incoming' THEN c.answeredext ELSE c.src END)"
         elif col == "client_number":
@@ -265,17 +266,26 @@ def get_distinct_values(prompt_id, column):
         df = pd.read_sql(text(query), conn, params={"pid": prompt_id})
     return sorted([str(x) for x in df['val'].tolist()])
 
-def get_report_json_keys(prompt_id):
+def get_report_json_keys(prompt_id, start_date=None, end_date=None):
     engine = get_engine()
+    where = "e.prompt_id = :pid"
+    params = {"pid": prompt_id}
+
+    if start_date and end_date:
+        where += " AND c.calldate >= :start AND c.calldate < :end"
+        params["start"] = start_date
+        params["end"] = end_date + timedelta(days=1)
+
     with engine.connect() as conn:
-        # Берем 50 последних записей для более полного охвата ключей
-        res = conn.execute(text("""
-            SELECT checklist_json, metrics_json
-            FROM evaluations
-            WHERE prompt_id = :pid
-            ORDER BY linkedid DESC
+        # Берем 50 последних записей за указанный период
+        res = conn.execute(text(f"""
+            SELECT e.checklist_json, e.metrics_json
+            FROM evaluations e
+            JOIN calls c ON c.linkedid = e.linkedid
+            WHERE {where}
+            ORDER BY c.calldate DESC
             LIMIT 50
-        """), {"pid": prompt_id}).fetchall()
+        """), params).fetchall()
 
         checklist_keys = set()
         metrics_keys = set()
@@ -402,8 +412,8 @@ with st.sidebar:
         st.session_state.report_filters = []
         st.session_state.last_prompt_id = selected_prompt_id
 
-    # Получаем ключи JSON
-    json_keys = get_report_json_keys(selected_prompt_id)
+    # Получаем ключи JSON за выбранный период
+    json_keys = get_report_json_keys(selected_prompt_id, start_date, end_date)
 
     base_columns = ["direction", "duration", "billsec", "politeness_score", "client_sentiment", "call_purpose", "operator_name", "client_number"]
     all_available_columns = base_columns + json_keys
@@ -607,6 +617,10 @@ else:
     df_agg['x_val'] = df_agg['x_val'].fillna("Не определено").astype(str).str.strip()
     if color_p:
         df_agg[color_p] = df_agg[color_p].fillna("Не определено").astype(str).str.strip()
+        # Для сегментации тоже применяем ДА/НЕТ если это булево поле
+        if settings["color_col"].startswith("checklist.") or (settings["color_col"].startswith("metrics.") and df_agg[color_p].isin(['0', '1', '0.0', '1.0', 'true', 'false']).all()):
+            bool_map = {'1': 'ДА', '1.0': 'ДА', 'true': 'ДА', '0': 'НЕТ', '0.0': 'НЕТ', 'false': 'НЕТ'}
+            df_agg[color_p] = df_agg[color_p].map(lambda x: bool_map.get(str(x).lower(), x))
 
     # Гарантируем уникальность пар (x_val, color_val) и заполняем пустоты нулями для правильного стекирования
     group_cols = ['x_val']
@@ -619,8 +633,17 @@ else:
 
     df_agg['y_val'] = df_agg['y_val'].fillna(0)
 
+    # Проверка, является ли поле булевым (чеклист или булева метрика)
+    # Если да, мы будем отображать ДА/НЕТ вместо 1/0
+    is_boolean_field = settings["agg_col"].startswith("checklist.") or \
+                        (settings["agg_col"].startswith("metrics.") and df_agg['x_val'].isin(['0', '1', '0.0', '1.0', 'true', 'false']).all())
+
     if settings["chart_type"] in ["bar_stack", "bar_group"]:
         bm = "stack" if settings["chart_type"] == "bar_stack" else "group"
+
+        if is_boolean_field:
+            bool_map = {'1': 'ДА', '1.0': 'ДА', 'true': 'ДА', '0': 'НЕТ', '0.0': 'НЕТ', 'false': 'НЕТ'}
+            df_agg['x_val'] = df_agg['x_val'].map(lambda x: bool_map.get(str(x).lower(), x))
 
         if settings["agg_type"] == "Процент":
             if color_p:
@@ -646,9 +669,19 @@ else:
                 fig.update_layout(yaxis_title="Доля (%) от общего итога")
         else:
             # Обычные значения (Количество, Сумма, Среднее)
+            # Обработка подписей для булевых значений (ДА/НЕТ)
+            if settings["y_axis_col"] and (settings["y_axis_col"].startswith("checklist.") or settings["y_axis_col"].startswith("metrics.")):
+                # Если мы считаем среднее/сумму по булеву полю
+                # но подпись 'ДА/НЕТ' применима скорее к группировке.
+                # Для Y-оси оставим числа, но если это Percentage - они и так в %
+                pass
+
             if bm == "stack":
                 fig = px.bar(df_agg, x='x_val', y='y_val', color=color_p,
                              barmode=bm, labels=labels_map, custom_data=['x_val'])
+
+                # Если Y это булево значение и мы не в режиме процента, можно попробовать подменить текст
+                # Но обычно на Y-оси при агрегации (Сумма/Среднее) получаются дробные числа или суммы > 1
                 fig.update_traces(texttemplate='%{y}', textposition='inside')
             else:
                 fig = px.bar(df_agg, x='x_val', y='y_val', color=color_p, text='y_val',
