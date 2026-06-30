@@ -244,13 +244,12 @@ def get_report_data(start_date, end_date, prompt_id, filters, agg_col, agg_type,
         df_details = pd.read_sql(text(query_details), conn, params=params)
 
     # 5. Преобразование форматов (напр. YYYY-MM-DD -> DD.MM)
-    if time_toggle and not is_periodic:
-        import re
-        def convert_date(val):
-            return re.sub(r'(\d{4})-(\d{2})-(\d{2})', r'\3.\2', str(val))
+    import re
+    def convert_date(val):
+        return re.sub(r'(\d{4})-(\d{2})-(\d{2})', r'\3.\2', str(val))
 
-        df_agg['x_val'] = df_agg['x_val'].apply(convert_date)
-        df_details['x_val'] = df_details['x_val'].apply(convert_date)
+    df_agg['x_val'] = df_agg['x_val'].apply(convert_date)
+    df_details['x_val'] = df_details['x_val'].apply(convert_date)
 
     return df_agg, df_details
 
