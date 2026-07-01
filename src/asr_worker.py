@@ -4,7 +4,7 @@ import torch
 import torchaudio
 import time
 import numpy as np
-from df.enhance import enhance, init_df, load_audio, save_audio
+import noisereduce as nr
 from db_utils import (
     fetch_call_metadata, upsert_call, insert_transcript, get_pg_connection,
     check_transcript_exists, set_call_status, get_call_status
@@ -15,51 +15,24 @@ from logging_utils import setup_logging
 setup_logging()
 logger = logging.getLogger(__name__)
 
-_df_model = None
-_df_state = None
-
-def get_df_model_and_state():
-    global _df_model, _df_state
-    if _df_model is None:
-        logger.info("Initializing DeepFilterNet model...")
-        # init_df возвращает кортеж из 3 элементов: (model, df_state, config)
-        _df_model, _df_state, _ = init_df()
-    return _df_model, _df_state
-
 def denoise_waveform(waveform: torch.Tensor, sample_rate: int = 16000) -> torch.Tensor:
     """
-    Подавление шума с помощью DeepFilterNet.
-    Требует 48кГц, поэтому выполняем ресэмплинг внутри.
+    Подавление шума с помощью noisereduce.
     """
     if waveform.shape[-1] == 0:
         return waveform
 
-    model, df_state = get_df_model_and_state()
-
-    # DeepFilterNet ожидает [channels, samples]
-    is_1d = False
-    if waveform.ndim == 1:
-        waveform = waveform.unsqueeze(0)
-        is_1d = True
-
     try:
-        # 1. Ресэмплинг в 48кГц (требование DeepFilterNet)
-        target_sr = 48000
-        resampler_to_48 = torchaudio.transforms.Resample(orig_freq=sample_rate, new_freq=target_sr)
-        wav_48 = resampler_to_48(waveform)
+        # noisereduce работает с numpy массивами
+        wav_np = waveform.numpy()
 
-        # 2. Очистка
-        denoised_48 = enhance(model, df_state, wav_48)
+        # Выполняем подавление шума
+        # prop_decrease=0.8 позволяет сохранить естественность речи, убирая большую часть шума
+        denoised_np = nr.reduce_noise(y=wav_np, sr=sample_rate, prop_decrease=0.8)
 
-        # 3. Ресэмплинг обратно в 16кГц
-        resampler_from_48 = torchaudio.transforms.Resample(orig_freq=target_sr, new_freq=sample_rate)
-        denoised = resampler_from_48(denoised_48)
-
-        if is_1d:
-            denoised = denoised.squeeze(0)
-        return denoised
+        return torch.from_numpy(denoised_np)
     except Exception as e:
-        logger.error(f"Error during DeepFilterNet processing: {e}")
+        logger.error(f"Error during noise reduction: {e}")
         return waveform
 
 def normalize_waveform_rms(waveform: torch.Tensor, target_rms: float = 0.05, max_gain: float = 8.0) -> tuple[torch.Tensor, float]:
