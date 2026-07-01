@@ -4,7 +4,7 @@ import torch
 import torchaudio
 import time
 import numpy as np
-from denoiser import pretrained
+import noisereduce as nr
 from db_utils import (
     fetch_call_metadata, upsert_call, insert_transcript, get_pg_connection,
     check_transcript_exists, set_call_status, get_call_status
@@ -15,42 +15,24 @@ from logging_utils import setup_logging
 setup_logging()
 logger = logging.getLogger(__name__)
 
-_denoiser_model = None
-
-def get_denoiser_model():
-    global _denoiser_model
-    if _denoiser_model is None:
-        logger.info("Initializing Facebook Denoiser model (dns64)...")
-        _denoiser_model = pretrained.dns64().cpu()
-        _denoiser_model.eval()
-    return _denoiser_model
-
-def denoise_waveform(waveform: torch.Tensor) -> torch.Tensor:
+def denoise_waveform(waveform: torch.Tensor, sample_rate: int = 16000) -> torch.Tensor:
     """
-    Подавление шума с помощью Facebook Denoiser (Demucs).
-    Ожидает 16кГц на входе.
+    Подавление шума с помощью noisereduce.
     """
     if waveform.shape[-1] == 0:
         return waveform
 
-    model = get_denoiser_model()
-
-    # Denoiser ожидает [batch, channels, samples]
-    is_1d = False
-    if waveform.ndim == 1:
-        waveform = waveform.unsqueeze(0) # [1, samples]
-        is_1d = True
-
     try:
-        with torch.no_grad():
-            # На вход подаем [batch, channels, samples] -> [1, channels, samples]
-            denoised = model(waveform.unsqueeze(0))[0] # Берем первый элемент батча
+        # noisereduce работает с numpy массивами
+        wav_np = waveform.numpy()
 
-        if is_1d:
-            denoised = denoised.squeeze(0)
-        return denoised
+        # Выполняем подавление шума
+        # prop_decrease=0.8 позволяет сохранить естественность речи, убирая большую часть шума
+        denoised_np = nr.reduce_noise(y=wav_np, sr=sample_rate, prop_decrease=0.8)
+
+        return torch.from_numpy(denoised_np)
     except Exception as e:
-        logger.error(f"Error during Facebook Denoiser processing: {e}")
+        logger.error(f"Error during noise reduction: {e}")
         return waveform
 
 def normalize_waveform_rms(waveform: torch.Tensor, target_rms: float = 0.05, max_gain: float = 8.0) -> tuple[torch.Tensor, float]:
@@ -130,8 +112,8 @@ def process_asr(file_path: str):
 
             # Очистка шума
             logger.info(f"[{linkedid}] Denoising...")
-            left_waveform = denoise_waveform(left_waveform)
-            right_waveform = denoise_waveform(right_waveform)
+            left_waveform = denoise_waveform(left_waveform, sr)
+            right_waveform = denoise_waveform(right_waveform, sr)
 
             # RMS-нормализация
             logger.info(f"[{linkedid}] Normalizing (RMS)...")
