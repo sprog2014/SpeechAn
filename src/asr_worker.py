@@ -4,7 +4,7 @@ import torch
 import torchaudio
 import time
 import numpy as np
-from df.enhance import enhance, init_df, load_audio, save_audio
+from denoiser import pretrained
 from db_utils import (
     fetch_call_metadata, upsert_call, insert_transcript, get_pg_connection,
     check_transcript_exists, set_call_status, get_call_status
@@ -15,51 +15,50 @@ from logging_utils import setup_logging
 setup_logging()
 logger = logging.getLogger(__name__)
 
-_df_model = None
-_df_state = None
+_denoiser_model = None
 
-def get_df_model_and_state():
-    global _df_model, _df_state
-    if _df_model is None:
-        logger.info("Initializing DeepFilterNet model...")
-        # init_df возвращает кортеж из 3 элементов: (model, df_state, config)
-        _df_model, _df_state, _ = init_df()
-    return _df_model, _df_state
+def get_denoiser_model():
+    global _denoiser_model
+    if _denoiser_model is None:
+        logger.info("Initializing Facebook Denoiser model (dns64)...")
+        _denoiser_model = pretrained.dns64().cpu()
+        _denoiser_model.eval()
+    return _denoiser_model
 
 def denoise_waveform(waveform: torch.Tensor, sample_rate: int = 16000) -> torch.Tensor:
     """
-    Подавление шума с помощью DeepFilterNet.
-    Требует 48кГц, поэтому выполняем ресэмплинг внутри.
+    Подавление шума с помощью Facebook Denoiser (Demucs).
+    Ожидает 16кГц на входе.
     """
     if waveform.shape[-1] == 0:
         return waveform
 
-    model, df_state = get_df_model_and_state()
+    model = get_denoiser_model()
 
-    # DeepFilterNet ожидает [channels, samples]
+    # Denoiser ожидает [batch, channels, samples]
     is_1d = False
     if waveform.ndim == 1:
-        waveform = waveform.unsqueeze(0)
+        waveform = waveform.unsqueeze(0) # [1, samples]
         is_1d = True
 
     try:
-        # 1. Ресэмплинг в 48кГц (требование DeepFilterNet)
-        target_sr = 48000
-        resampler_to_48 = torchaudio.transforms.Resample(orig_freq=sample_rate, new_freq=target_sr)
-        wav_48 = resampler_to_48(waveform)
+        # Ресэмплинг до 16кГц если нужно (модель dns64 обучена на 16кГц)
+        if sample_rate != 16000:
+            waveform = torchaudio.transforms.Resample(orig_freq=sample_rate, new_freq=16000)(waveform)
 
-        # 2. Очистка
-        denoised_48 = enhance(model, df_state, wav_48)
+        with torch.no_grad():
+            # На вход подаем [1, channels, samples]
+            denoised = model(waveform.unsqueeze(0))[0] # Берем первый элемент батча
 
-        # 3. Ресэмплинг обратно в 16кГц
-        resampler_from_48 = torchaudio.transforms.Resample(orig_freq=target_sr, new_freq=sample_rate)
-        denoised = resampler_from_48(denoised_48)
+        # Ресэмплинг обратно если нужно
+        if sample_rate != 16000:
+            denoised = torchaudio.transforms.Resample(orig_freq=16000, new_freq=sample_rate)(denoised)
 
         if is_1d:
             denoised = denoised.squeeze(0)
         return denoised
     except Exception as e:
-        logger.error(f"Error during DeepFilterNet processing: {e}")
+        logger.error(f"Error during Facebook Denoiser processing: {e}")
         return waveform
 
 def normalize_waveform_rms(waveform: torch.Tensor, target_rms: float = 0.05, max_gain: float = 8.0) -> tuple[torch.Tensor, float]:
