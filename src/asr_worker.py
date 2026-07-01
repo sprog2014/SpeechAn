@@ -25,7 +25,7 @@ def get_denoiser_model():
         _denoiser_model.eval()
     return _denoiser_model
 
-def denoise_waveform(waveform: torch.Tensor, sample_rate: int = 16000) -> torch.Tensor:
+def denoise_waveform(waveform: torch.Tensor) -> torch.Tensor:
     """
     Подавление шума с помощью Facebook Denoiser (Demucs).
     Ожидает 16кГц на входе.
@@ -42,17 +42,9 @@ def denoise_waveform(waveform: torch.Tensor, sample_rate: int = 16000) -> torch.
         is_1d = True
 
     try:
-        # Ресэмплинг до 16кГц если нужно (модель dns64 обучена на 16кГц)
-        if sample_rate != 16000:
-            waveform = torchaudio.transforms.Resample(orig_freq=sample_rate, new_freq=16000)(waveform)
-
         with torch.no_grad():
-            # На вход подаем [1, channels, samples]
+            # На вход подаем [batch, channels, samples] -> [1, channels, samples]
             denoised = model(waveform.unsqueeze(0))[0] # Берем первый элемент батча
-
-        # Ресэмплинг обратно если нужно
-        if sample_rate != 16000:
-            denoised = torchaudio.transforms.Resample(orig_freq=16000, new_freq=sample_rate)(denoised)
 
         if is_1d:
             denoised = denoised.squeeze(0)
@@ -138,8 +130,8 @@ def process_asr(file_path: str):
 
             # Очистка шума
             logger.info(f"[{linkedid}] Denoising...")
-            left_waveform = denoise_waveform(left_waveform, sr)
-            right_waveform = denoise_waveform(right_waveform, sr)
+            left_waveform = denoise_waveform(left_waveform)
+            right_waveform = denoise_waveform(right_waveform)
 
             # RMS-нормализация
             logger.info(f"[{linkedid}] Normalizing (RMS)...")
