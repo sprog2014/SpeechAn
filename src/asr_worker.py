@@ -4,7 +4,7 @@ import torch
 import torchaudio
 import time
 import numpy as np
-import ctypes
+from df.enhance import enhance, init_df, load_audio, save_audio
 from db_utils import (
     fetch_call_metadata, upsert_call, insert_transcript, get_pg_connection,
     check_transcript_exists, set_call_status, get_call_status
@@ -15,93 +15,52 @@ from logging_utils import setup_logging
 setup_logging()
 logger = logging.getLogger(__name__)
 
-class RNNoiseDirect:
-    def __init__(self):
-        # Пытаемся найти библиотеку в установленном пакете pyrnnoise
-        try:
-            # Не используем import pyrnnoise здесь, так как он может потянуть сломанный audiolab
-            # Просто ищем путь к пакету
-            import importlib.util
-            spec = importlib.util.find_spec("pyrnnoise")
-            if spec and spec.origin:
-                lib_path = os.path.join(os.path.dirname(spec.origin), 'librnnoise.so')
-                self.lib = ctypes.CDLL(lib_path)
-            else:
-                raise ImportError("pyrnnoise not found")
-        except Exception as e:
-            logger.error(f"Failed to load RNNoise library: {e}")
-            self.lib = None
-            return
+_df_model = None
+_df_state = None
 
-        self.lib.rnnoise_create.restype = ctypes.c_void_p
-        self.lib.rnnoise_destroy.argtypes = [ctypes.c_void_p]
-        self.lib.rnnoise_process_frame.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_float)]
-        self.lib.rnnoise_process_frame.restype = ctypes.c_float
-
-        self.st = self.lib.rnnoise_create(None)
-
-    def __del__(self):
-        if hasattr(self, 'lib') and self.lib and self.st:
-            self.lib.rnnoise_destroy(self.st)
-
-    def process(self, wav: np.ndarray):
-        # wav: float32, 1D, 48000Hz
-        if self.lib is None:
-            return wav
-
-        frame_size = 480
-        num_frames = len(wav) // frame_size
-        output = np.zeros_like(wav)
-
-        for i in range(num_frames):
-            frame = wav[i*frame_size : (i+1)*frame_size].astype(np.float32)
-            in_ptr = frame.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
-            out_ptr = output[i*frame_size : (i+1)*frame_size].ctypes.data_as(ctypes.POINTER(ctypes.c_float))
-            self.lib.rnnoise_process_frame(self.st, out_ptr, in_ptr)
-
-        return output
+def get_df_model_and_state():
+    global _df_model, _df_state
+    if _df_model is None:
+        logger.info("Initializing DeepFilterNet model...")
+        # init_df возвращает кортеж из 3 элементов: (model, df_state, config)
+        _df_model, _df_state, _ = init_df()
+    return _df_model, _df_state
 
 def denoise_waveform(waveform: torch.Tensor, sample_rate: int = 16000) -> torch.Tensor:
     """
-    Подавление шума с помощью RNNoise.
+    Подавление шума с помощью DeepFilterNet.
     Требует 48кГц, поэтому выполняем ресэмплинг внутри.
     """
     if waveform.shape[-1] == 0:
         return waveform
 
-    # 1. Ресэмплинг в 48кГц
-    target_sr = 48000
-    resampler_to_48 = torchaudio.transforms.Resample(orig_freq=sample_rate, new_freq=target_sr)
-    wav_48 = resampler_to_48(waveform)
+    model, df_state = get_df_model_and_state()
 
-    # Если стерео, обрабатываем каналы по отдельности
+    # DeepFilterNet ожидает [channels, samples]
     is_1d = False
-    if wav_48.ndim == 1:
-        wav_48 = wav_48.unsqueeze(0)
+    if waveform.ndim == 1:
+        waveform = waveform.unsqueeze(0)
         is_1d = True
 
-    num_channels = wav_48.shape[0]
-    denoised_channels = []
-
     try:
-        for c in range(num_channels):
-            denoiser = RNNoiseDirect()
-            channel_data = wav_48[c].numpy()
-            denoised_channel = denoiser.process(channel_data)
-            denoised_channels.append(torch.from_numpy(denoised_channel))
+        # 1. Ресэмплинг в 48кГц (требование DeepFilterNet)
+        target_sr = 48000
+        resampler_to_48 = torchaudio.transforms.Resample(orig_freq=sample_rate, new_freq=target_sr)
+        wav_48 = resampler_to_48(waveform)
 
-        denoised_wav_48 = torch.stack(denoised_channels)
+        # 2. Очистка
+        denoised_48 = enhance(model, df_state, wav_48)
+
+        # 3. Ресэмплинг обратно в 16кГц
+        resampler_from_48 = torchaudio.transforms.Resample(orig_freq=target_sr, new_freq=sample_rate)
+        denoised = resampler_from_48(denoised_48)
+
+        if is_1d:
+            denoised = denoised.squeeze(0)
+        return denoised
     except Exception as e:
-        logger.error(f"Error during RNNoise processing: {e}")
+        logger.error(f"Error during DeepFilterNet processing: {e}")
         return waveform
-
-    # 2. Ресэмплинг обратно
-    resampler_from_48 = torchaudio.transforms.Resample(orig_freq=target_sr, new_freq=sample_rate)
-    output = resampler_from_48(denoised_wav_48)
-
-    if is_1d:
-        output = output.squeeze(0)
-    return output
 
 def normalize_waveform_rms(waveform: torch.Tensor, target_rms: float = 0.05, max_gain: float = 8.0) -> tuple[torch.Tensor, float]:
     """
