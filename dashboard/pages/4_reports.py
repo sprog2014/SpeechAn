@@ -28,6 +28,21 @@ def get_engine():
     db_url = f"postgresql://{PG_CONFIG['user']}:{PG_CONFIG['password']}@{PG_CONFIG['host']}:{PG_CONFIG['port']}/{PG_CONFIG['dbname']}"
     return create_engine(db_url)
 
+@st.cache_data(ttl=3600)
+def get_db_columns_map():
+    engine = get_engine()
+    with engine.connect() as conn:
+        res = conn.execute(text("""
+            SELECT table_name, column_name
+            FROM information_schema.columns
+            WHERE table_name IN ('calls', 'evaluations')
+            AND table_schema = 'public'
+        """))
+        cols = {}
+        for r in res.fetchall():
+            cols[r[1]] = 'c' if r[0] == 'calls' else 'e'
+        return cols
+
 def get_report_sql_utils(prompt_id, time_toggle, time_res, is_periodic):
     # Получаем динамические маппинги
     all_mappings = get_value_mappings()
@@ -35,6 +50,8 @@ def get_report_sql_utils(prompt_id, time_toggle, time_res, is_periodic):
 
     purpose_sql = build_case_sql('call_purpose', mapping['call_purpose'] if mapping else [], 'Другое')
     sentiment_sql = build_case_sql('client_sentiment', mapping['client_sentiment'] if mapping else [], 'Не определено')
+
+    cols_map = get_db_columns_map()
 
     def get_sql_col(col, as_numeric=False):
         if not col: return "NULL"
@@ -61,8 +78,9 @@ def get_report_sql_utils(prompt_id, time_toggle, time_res, is_periodic):
         elif col == "client_sentiment":
             expr = sentiment_sql
         else:
-            expr = f"c.{col}" if col in ["calldate", "direction", "duration", "billsec"] else f"e.{col}"
-            if as_numeric and col in ["duration", "billsec", "politeness_score"]:
+            prefix = cols_map.get(col, 'e')
+            expr = f"{prefix}.{col}"
+            if as_numeric:
                 expr = f"({expr})::numeric"
         return expr
 
@@ -330,17 +348,10 @@ def get_detailed_call_list(start_date, end_date, prompt_id, filters, agg_col, ti
 @st.cache_data(ttl=300)
 def get_distinct_values(prompt_id, column):
     engine = get_engine()
-    col_sql = column
-    if column.startswith("checklist."):
-        col_sql = f"checklist_json->>'{column.split('.')[1]}'"
-    elif column.startswith("metrics."):
-        col_sql = f"metrics_json->>'{column.split('.')[1]}'"
-    elif column == "operator_name":
-        col_sql = "COALESCE(p.name, CASE WHEN c.direction = 'incoming' THEN c.answeredext ELSE c.src END)"
-    elif column == "client_number":
-        col_sql = "CASE WHEN c.direction = 'incoming' THEN c.src ELSE c.answeredext END"
-    else:
-        col_sql = f"c.{column}" if column in ["direction"] else f"e.{column}"
+    # Получаем утилиты для генерации SQL, чтобы использовать единую логику маппинга колонок
+    # (Ось времени и периодичность тут не важны, поэтому ставим False/None)
+    get_sql_col, _, _, _ = get_report_sql_utils(prompt_id, False, None, False)
+    col_sql = get_sql_col(column)
 
     query = f"""
         SELECT DISTINCT {col_sql} as val
