@@ -496,8 +496,19 @@ with st.sidebar:
     # Получаем ключи JSON за выбранный период
     json_keys = get_report_json_keys(selected_prompt_id, start_date, end_date)
 
-    base_columns = ["direction", "duration", "billsec", "politeness_score", "client_sentiment", "call_purpose", "operator_name", "client_number"]
-    all_available_columns = base_columns + json_keys
+    # Получаем реальные колонки из БД динамически
+    with get_engine().connect() as conn:
+        res = conn.execute(text("""
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_name IN ('calls', 'evaluations')
+            AND table_schema = 'public'
+            AND column_name NOT IN ('linkedid', 'prompt_id', 'file_path', 'processing_status', 'processing_duration', 'created_at')
+        """))
+        db_columns = [r[0] for r in res.fetchall()]
+
+    virtual_columns = ["operator_name", "client_number"]
+    all_available_columns = sorted(list(set(db_columns + virtual_columns + json_keys)))
 
     # Для X-оси
     x_axis_columns = ["total"] + all_available_columns
@@ -559,7 +570,8 @@ with st.sidebar:
 
     y_axis_col = None
     if agg_type in ["Сумма", "Среднее"]:
-        y_axis_options = [c for c in base_columns if c in ["duration", "billsec", "politeness_score"]] + json_keys
+        # Для Y-оси оставляем только числовые поля
+        y_axis_options = [c for c in all_available_columns if c in ["duration", "billsec", "politeness_score", "billsec", "rating"] or c.startswith("metrics.") or c.startswith("checklist.")]
         saved_y_axis = st.session_state.viz_settings.get("y_axis_col")
         y_axis_col = st.selectbox("Поле для расчета", y_axis_options,
                                   index=y_axis_options.index(saved_y_axis) if saved_y_axis in y_axis_options else 0,
