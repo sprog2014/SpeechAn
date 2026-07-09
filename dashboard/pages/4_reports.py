@@ -13,7 +13,7 @@ from config import PG_CONFIG
 from db_utils import (
     get_all_prompts, get_default_prompt, get_call_file_path,
     get_call_transcript, format_dialogue, get_value_mappings,
-    build_case_sql
+    build_case_sql, get_field_synonyms
 )
 
 # Проверка авторизации
@@ -408,22 +408,16 @@ def delete_report(report_id):
         conn.execute(text("DELETE FROM reports WHERE id = :id"), {"id": report_id})
         conn.commit()
 
-# Словарь для отображения имен колонок
-column_labels = {
-    "total": "-- Всего --",
-    "calldate": "Дата и время",
-    "direction": "Направление",
-    "duration": "Длительность (общая)",
-    "billsec": "Длительность (разговор)",
-    "politeness_score": "Вежливость",
-    "client_sentiment": "Настроение",
-    "call_purpose": "Цель звонка",
-    "operator_name": "Имя оператора",
-    "client_number": "Номер клиента"
-}
+@st.cache_data(ttl=60)
+def get_cached_synonyms(prompt_id):
+    return get_field_synonyms(prompt_id)
 
-def format_col_name(col):
-    return column_labels.get(col, col)
+def format_col_name(col, prompt_id=None):
+    if col == "total": return "-- Всего --"
+    if prompt_id:
+        synonyms = get_cached_synonyms(prompt_id)
+        return synonyms.get(col, col)
+    return col
 
 # --- Инициализация состояния ---
 if "report_filters" not in st.session_state:
@@ -513,10 +507,10 @@ with st.sidebar:
         st.session_state.report_filters.append({"column": all_available_columns[0], "op": "равно", "value": "", "not": False})
 
     for i, f in enumerate(st.session_state.report_filters):
-        with st.expander(f"Фильтр {i+1}: {format_col_name(f['column'])}"):
+        with st.expander(f"Фильтр {i+1}: {format_col_name(f['column'], selected_prompt_id)}"):
             f['column'] = st.selectbox(f"Поле", all_available_columns,
                                       index=all_available_columns.index(f['column']) if f['column'] in all_available_columns else 0,
-                                      format_func=format_col_name, key=f"col_{i}")
+                                      format_func=lambda x: format_col_name(x, selected_prompt_id), key=f"col_{i}")
 
             c1, c2 = st.columns([1, 4])
             with c1:
@@ -547,13 +541,13 @@ with st.sidebar:
     saved_agg_col = st.session_state.viz_settings.get("agg_col")
     agg_col = st.selectbox("Группировка (X-ось)", x_axis_columns,
                            index=x_axis_columns.index(saved_agg_col) if saved_agg_col in x_axis_columns else (x_axis_columns.index("call_purpose") if "call_purpose" in x_axis_columns else 0),
-                           format_func=format_col_name)
+                           format_func=lambda x: format_col_name(x, selected_prompt_id))
 
     saved_color_col = st.session_state.viz_settings.get("color_col")
     color_options = [None] + all_available_columns
     def format_color_col(col):
         if col is None: return "-- Без сегментации --"
-        return format_col_name(col)
+        return format_col_name(col, selected_prompt_id)
 
     color_col = st.selectbox("Сегментация (Цвет)", color_options,
                              index=color_options.index(saved_color_col) if saved_color_col in color_options else 0,
@@ -569,7 +563,7 @@ with st.sidebar:
         saved_y_axis = st.session_state.viz_settings.get("y_axis_col")
         y_axis_col = st.selectbox("Поле для расчета", y_axis_options,
                                   index=y_axis_options.index(saved_y_axis) if saved_y_axis in y_axis_options else 0,
-                                  format_func=format_col_name)
+                                  format_func=lambda x: format_col_name(x, selected_prompt_id))
 
     chart_type_map = {
         "Столбчатая (Stacked Bar Chart)": "bar_stack",
@@ -701,8 +695,8 @@ else:
     fig = None
     labels_map = {
         'y_val': settings["agg_type"],
-        'x_val': format_col_name(settings["agg_col"]),
-        'color_val': format_col_name(settings.get("color_col")) if settings.get("color_col") else None
+        'x_val': format_col_name(settings["agg_col"], settings["prompt_id"]),
+        'color_val': format_col_name(settings.get("color_col"), settings["prompt_id"]) if settings.get("color_col") else None
     }
     color_p = "color_val" if settings.get("color_col") else None
     # Используем _raw колонки для custom_data, чтобы фильтрация при клике была точной
@@ -801,7 +795,7 @@ else:
         fig = px.area(df_agg, x='x_val', y='y_val', color=color_p, labels=labels_map, custom_data=cd_cols)
         fig.update_layout(xaxis=dict(type='category', categoryorder='trace'))
 
-    st.subheader(f"{title_prefix}: {settings['agg_type']} по {format_col_name(settings['agg_col'])}")
+    st.subheader(f"{title_prefix}: {settings['agg_type']} по {format_col_name(settings['agg_col'], settings['prompt_id'])}")
 
     selected_points = st.plotly_chart(
         fig,

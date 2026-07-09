@@ -145,3 +145,22 @@ CREATE TABLE reports (
     settings        JSONB NOT NULL,
     created_at      TIMESTAMP DEFAULT now()
 );
+
+CREATE TABLE field_synonyms (
+    prompt_id INT NOT NULL REFERENCES prompts(id) ON DELETE CASCADE,
+    technical_name VARCHAR(100) NOT NULL,
+    synonym VARCHAR(255) NOT NULL,
+    PRIMARY KEY (prompt_id, technical_name)
+);
+
+-- Pre-populate synonyms for the default prompt
+INSERT INTO field_synonyms (prompt_id, technical_name, synonym) VALUES
+(1, 'calldate', 'Дата и время'),
+(1, 'direction', 'Направление'),
+(1, 'duration', 'Длительность (общая)'),
+(1, 'billsec', 'Длительность (разговор)'),
+(1, 'politeness_score', 'Вежливость'),
+(1, 'client_sentiment', 'Настроение'),
+(1, 'call_purpose', 'Цель звонка'),
+(1, 'operator_name', 'Имя оператора'),
+(1, 'client_number', 'Номер клиента');
