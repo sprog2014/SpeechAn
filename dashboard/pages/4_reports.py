@@ -29,18 +29,7 @@ def get_engine():
     db_url = f"postgresql://{PG_CONFIG['user']}:{PG_CONFIG['password']}@{PG_CONFIG['host']}:{PG_CONFIG['port']}/{PG_CONFIG['dbname']}"
     return create_engine(db_url)
 
-@st.cache_data(ttl=60)
-def get_report_data(start_date, end_date, prompt_id, filters, agg_col, agg_type, y_axis_col, time_toggle, time_res, color_col=None, sort_axis="x_val", sort_dir="ASC", is_periodic=False):
-    engine = get_engine()
-
-    # 1. Формируем WHERE
-    where_clauses = ["e.prompt_id = :pid", "c.calldate >= :start", "c.calldate < :end"]
-    params = {
-        "pid": prompt_id,
-        "start": start_date,
-        "end": end_date + timedelta(days=1)
-    }
-
+def get_report_sql_utils(prompt_id, time_toggle, time_res, is_periodic):
     # Получаем динамические маппинги
     all_mappings = get_value_mappings()
     mapping = next((m for m in all_mappings if m['prompt_id'] == prompt_id), None)
@@ -49,6 +38,7 @@ def get_report_data(start_date, end_date, prompt_id, filters, agg_col, agg_type,
     sentiment_sql = build_case_sql('client_sentiment', mapping['client_sentiment'] if mapping else [], 'Не определено')
 
     def get_sql_col(col, as_numeric=False):
+        if not col: return "NULL"
         expr = ""
         if col.startswith("checklist."):
             key = col.split('.')[1]
@@ -76,6 +66,54 @@ def get_report_data(start_date, end_date, prompt_id, filters, agg_col, agg_type,
             if as_numeric and col in ["duration", "billsec", "politeness_score"]:
                 expr = f"({expr})::numeric"
         return expr
+
+    def get_x_axis_sql(agg_col):
+        if agg_col == "total":
+            return "'Все данные'"
+        elif time_toggle:
+            if time_res == "День":
+                return "TO_CHAR(c.calldate, 'YYYY-MM-DD')"
+            elif time_res == "День недели":
+                if is_periodic:
+                    return """CASE EXTRACT(DOW FROM c.calldate)
+                        WHEN 1 THEN '1. Понедельник'
+                        WHEN 2 THEN '2. Вторник'
+                        WHEN 3 THEN '3. Среда'
+                        WHEN 4 THEN '4. Четверг'
+                        WHEN 5 THEN '5. Пятница'
+                        WHEN 6 THEN '6. Суббота'
+                        WHEN 0 THEN '7. Воскресенье'
+                        ELSE 'Неизвестно' END"""
+                else:
+                    return """TO_CHAR(c.calldate, 'YYYY-MM-DD') || ' (' ||
+                        CASE EXTRACT(DOW FROM c.calldate)
+                        WHEN 1 THEN 'Пн' WHEN 2 THEN 'Вт' WHEN 3 THEN 'Ср'
+                        WHEN 4 THEN 'Чт' WHEN 5 THEN 'Пт' WHEN 6 THEN 'Сб'
+                        WHEN 0 THEN 'Вс' ELSE '?' END || ')'"""
+            elif time_res == "Час":
+                if is_periodic:
+                    return r"LPAD(EXTRACT(HOUR FROM c.calldate)::text, 2, '0') || '\:00'"
+                else:
+                    return r"TO_CHAR(c.calldate, 'YYYY-MM-DD HH24\:00')"
+            else:
+                return "TO_CHAR(c.calldate, 'YYYY-MM-DD')"
+        else:
+            return get_sql_col(agg_col)
+
+    return get_sql_col, get_x_axis_sql, purpose_sql, sentiment_sql
+
+@st.cache_data(ttl=60)
+def get_report_data(start_date, end_date, prompt_id, filters, agg_col, agg_type, y_axis_col, time_toggle, time_res, color_col=None, sort_axis="x_val", sort_dir="ASC", is_periodic=False):
+    engine = get_engine()
+    get_sql_col, get_x_axis_sql, purpose_sql, sentiment_sql = get_report_sql_utils(prompt_id, time_toggle, time_res, is_periodic)
+
+    # 1. Формируем WHERE
+    where_clauses = ["e.prompt_id = :pid", "c.calldate >= :start", "c.calldate < :end"]
+    params = {
+        "pid": prompt_id,
+        "start": start_date,
+        "end": end_date + timedelta(days=1)
+    }
 
     for i, f in enumerate(filters):
         col = f['column']
@@ -124,39 +162,7 @@ def get_report_data(start_date, end_date, prompt_id, filters, agg_col, agg_type,
     where_str = " AND ".join(where_clauses)
 
     # 2. Формируем проекцию X-оси
-    if agg_col == "total":
-        x_sql = "'Все данные'"
-    elif time_toggle:
-        if time_res == "День":
-            x_sql = "TO_CHAR(c.calldate, 'YYYY-MM-DD')"
-        elif time_res == "День недели":
-            if is_periodic:
-                x_sql = """CASE EXTRACT(DOW FROM c.calldate)
-                    WHEN 1 THEN '1. Понедельник'
-                    WHEN 2 THEN '2. Вторник'
-                    WHEN 3 THEN '3. Среда'
-                    WHEN 4 THEN '4. Четверг'
-                    WHEN 5 THEN '5. Пятница'
-                    WHEN 6 THEN '6. Суббота'
-                    WHEN 0 THEN '7. Воскресенье'
-                    ELSE 'Неизвестно' END"""
-            else:
-                # Для непериодического дня недели выводим "YYYY-MM-DD (День недели)" для правильной сортировки и читаемости
-                x_sql = """TO_CHAR(c.calldate, 'YYYY-MM-DD') || ' (' ||
-                    CASE EXTRACT(DOW FROM c.calldate)
-                    WHEN 1 THEN 'Пн' WHEN 2 THEN 'Вт' WHEN 3 THEN 'Ср'
-                    WHEN 4 THEN 'Чт' WHEN 5 THEN 'Пт' WHEN 6 THEN 'Сб'
-                    WHEN 0 THEN 'Вс' ELSE '?' END || ')'"""
-        elif time_res == "Час":
-            if is_periodic:
-                # Экранируем двоеточие для SQLAlchemy, чтобы не считалось за именованный параметр
-                x_sql = r"LPAD(EXTRACT(HOUR FROM c.calldate)::text, 2, '0') || '\:00'"
-            else:
-                x_sql = r"TO_CHAR(c.calldate, 'YYYY-MM-DD HH24\:00')"
-        else:
-            x_sql = "TO_CHAR(c.calldate, 'YYYY-MM-DD')"
-    else:
-        x_sql = get_sql_col(agg_col)
+    x_sql = get_x_axis_sql(agg_col)
 
     # 3. Формируем запрос для графиков (Агрегация на стороне БД)
     y_sql = "*"
@@ -221,46 +227,104 @@ def get_report_data(start_date, end_date, prompt_id, filters, agg_col, agg_type,
             ORDER BY {final_sort}
         """
 
-    # 4. Запрос для детализации (Лимит 1000 для скорости)
-    color_detail = f", {get_sql_col(color_col)} as color_val" if color_col else ""
-    query_details = f"""
-        SELECT
-            c.calldate, c.direction,
-            CASE WHEN c.direction = 'incoming' THEN c.src ELSE c.answeredext END as client_number,
-            COALESCE(p.name, CASE WHEN c.direction = 'incoming' THEN c.answeredext ELSE c.src END) as operator_name,
-            c.duration, c.billsec, {purpose_sql} as call_purpose, {sentiment_sql} as client_sentiment,
-            e.politeness_score, e.call_summary, e.checklist_json, c.linkedid,
-            {x_sql} as x_val {color_detail}
-        FROM calls c
-        JOIN evaluations e ON c.linkedid = e.linkedid
-        LEFT JOIN phones p ON p.number = (CASE WHEN c.direction = 'incoming' THEN c.answeredext ELSE c.src END)
-        WHERE {where_str}
-        ORDER BY c.calldate DESC
-        LIMIT 10000
-    """
-
     with engine.connect() as conn:
         df_agg = pd.read_sql(text(query_agg), conn, params=params)
-        df_details = pd.read_sql(text(query_details), conn, params=params)
 
     # Сохраняем сырые значения для точной фильтрации при клике
     df_agg['x_val_raw'] = df_agg['x_val']
     if 'color_val' in df_agg.columns:
         df_agg['color_val_raw'] = df_agg['color_val']
 
-    df_details['x_val_raw'] = df_details['x_val']
-    if 'color_val' in df_details.columns:
-        df_details['color_val_raw'] = df_details['color_val']
-
-    # 5. Преобразование форматов (напр. YYYY-MM-DD -> DD.MM)
+    # Преобразование форматов (напр. YYYY-MM-DD -> DD.MM)
     import re
     def convert_date(val):
         return re.sub(r'(\d{4})-(\d{2})-(\d{2})', r'\3.\2', str(val))
 
     df_agg['x_val'] = df_agg['x_val'].apply(convert_date)
-    df_details['x_val'] = df_details['x_val'].apply(convert_date)
 
-    return df_agg, df_details
+    return df_agg
+
+@st.cache_data(ttl=60)
+def get_detailed_call_list(start_date, end_date, prompt_id, filters, agg_col, time_toggle, time_res, is_periodic, x_val_raw=None, color_col=None, color_val_raw=None, limit=2000):
+    engine = get_engine()
+    get_sql_col, get_x_axis_sql, purpose_sql, sentiment_sql = get_report_sql_utils(prompt_id, time_toggle, time_res, is_periodic)
+
+    where_clauses = ["e.prompt_id = :pid", "c.calldate >= :start", "c.calldate < :end"]
+    params = {
+        "pid": prompt_id, "start": start_date, "end": end_date + timedelta(days=1)
+    }
+
+    # Применяем фильтры отчета
+    for i, f in enumerate(filters):
+        col = f['column']
+        op = f['op']
+        col_sql = get_sql_col(col, as_numeric=(op in ["больше", "меньше"]))
+        val = f['value']
+        is_not = f.get('not', False)
+        p_name = f"v_{i}"
+        clause = ""
+
+        if op == "заполнено": clause = f"{col_sql} IS NOT NULL"
+        elif op == "не заполнено": clause = f"{col_sql} IS NULL"
+        elif op == "равно":
+            if isinstance(val, list):
+                if not val: continue
+                clause = f"{col_sql} IN :v_{i}"
+                params[p_name] = tuple(val)
+            else:
+                clause = f"{col_sql} = :v_{i}"
+                params[p_name] = val
+        elif op in ["больше", "меньше"]:
+            clause = f"{col_sql} {'>' if op == 'больше' else '<'} :v_{i}"
+            params[p_name] = float(val)
+        elif op == "содержит":
+            clause = f"{col_sql} ILIKE :v_{i}"
+            params[p_name] = f"%{val}%"
+        elif op == "начинается с":
+            clause = f"{col_sql} ILIKE :v_{i}"
+            params[p_name] = f"{val}%"
+
+        if clause:
+            where_clauses.append(f"NOT ({clause})" if is_not else clause)
+
+    # Применяем фильтры сегмента (Drill-down)
+    if x_val_raw is not None:
+        x_sql = get_x_axis_sql(agg_col)
+        if x_val_raw == 'Не определено':
+            where_clauses.append(f"{x_sql} IS NULL")
+        else:
+            where_clauses.append(f"{x_sql} = :drill_x")
+            params["drill_x"] = x_val_raw
+
+    if color_col and color_val_raw is not None:
+        c_sql = get_sql_col(color_col)
+        if color_val_raw == 'Не определено':
+            where_clauses.append(f"{c_sql} IS NULL")
+        else:
+            where_clauses.append(f"{c_sql} = :drill_c")
+            params["drill_c"] = color_val_raw
+
+    where_str = " AND ".join(where_clauses)
+
+    query = f"""
+        SELECT
+            c.calldate, c.direction,
+            CASE WHEN c.direction = 'incoming' THEN c.src ELSE c.answeredext END as client_number,
+            COALESCE(p.name, CASE WHEN c.direction = 'incoming' THEN c.answeredext ELSE c.src END) as operator_name,
+            c.duration, c.billsec, {purpose_sql} as call_purpose, {sentiment_sql} as client_sentiment,
+            e.politeness_score, e.call_summary, e.checklist_json, c.linkedid
+        FROM calls c
+        JOIN evaluations e ON c.linkedid = e.linkedid
+        LEFT JOIN phones p ON p.number = (CASE WHEN c.direction = 'incoming' THEN c.answeredext ELSE c.src END)
+        WHERE {where_str}
+        ORDER BY c.calldate DESC
+        LIMIT {limit}
+    """
+
+    with engine.connect() as conn:
+        df = pd.read_sql(text(query), conn, params=params)
+
+    return df
 
 @st.cache_data(ttl=300)
 def get_distinct_values(prompt_id, column):
@@ -617,7 +681,7 @@ if st.session_state.applied_settings is None:
 
 settings = st.session_state.applied_settings
 try:
-    df_agg, df_details = get_report_data(
+    df_agg = get_report_data(
         settings["start_date"], settings["end_date"], settings["prompt_id"],
         settings["filters"], settings["agg_col"], settings["agg_type"],
         settings["y_axis_col"], settings["time_toggle"], settings["time_res"],
@@ -653,9 +717,10 @@ else:
             bool_map = {'1': 'ДА', '1.0': 'ДА', 'true': 'ДА', '0': 'НЕТ', '0.0': 'НЕТ', 'false': 'НЕТ'}
             df_agg[color_p] = df_agg[color_p].map(lambda x: bool_map.get(str(x).lower(), x))
 
-    # Гарантируем уникальность пар (x_val, color_val) и заполняем пустоты нулями для правильного стекирования
-    group_cols = ['x_val']
-    if color_p: group_cols.append(color_p)
+    # Гарантируем уникальность пар (x_val, color_val) и заполняем пустоты нулями для правильного стекирования.
+    # Включаем сырые колонки в группировку, чтобы они сохранились для Plotly custom_data.
+    group_cols = ['x_val', 'x_val_raw']
+    if color_p: group_cols.extend([color_p, 'color_val_raw'])
 
     if settings["agg_type"] == "Среднее":
         # Используем sort=False чтобы сохранить порядок сортировки из БД
@@ -746,25 +811,26 @@ else:
         theme=None
     )
 
-    filtered_selection = df_details.copy()
+    # Загружаем детализацию звонков (Drill-down)
+    x_drill = None
+    c_drill = None
+
     if selected_points and selected_points.selection.get("points"):
         point = selected_points.selection["points"][0]
-
-        # Извлекаем сырые данные из customdata для максимально точной фильтрации
         custom_data = point.get("customdata", [None, None])
-        x_val_raw = custom_data[0]
-        color_val_raw = custom_data[1] if len(custom_data) > 1 else None
+        x_drill = custom_data[0]
+        c_drill = custom_data[1] if len(custom_data) > 1 else None
 
-        if x_val_raw is not None:
-            # Фильтруем по сохраненной в df_details сырой колонке
-            filtered_selection = filtered_selection[filtered_selection['x_val_raw'].astype(str) == str(x_val_raw)]
-
-        if color_val_raw is not None:
-            # Фильтруем по сохраненной в df_details сырой колонке
-            filtered_selection = filtered_selection[filtered_selection['color_val_raw'].astype(str) == str(color_val_raw)]
+    # Выполняем точный запрос к БД для получения списка звонков
+    df_calls = get_detailed_call_list(
+        settings["start_date"], settings["end_date"], settings["prompt_id"],
+        settings["filters"], settings["agg_col"], settings["time_toggle"],
+        settings["time_res"], settings.get("is_periodic", False),
+        x_val_raw=x_drill, color_col=settings.get("color_col"), color_val_raw=c_drill
+    )
 
     st.markdown("---")
-    st.subheader(f"Список звонков ({len(filtered_selection)})")
+    st.subheader(f"Список звонков ({len(df_calls)})")
 
     def format_mmss(sec):
         if not sec or sec <= 0: return "00:00"
@@ -784,7 +850,7 @@ else:
         ('farewell', '🤝', 'Прощание')
     ]
 
-    display_df = filtered_selection.copy()
+    display_df = df_calls.copy()
     dir_map = {'incoming': '📥', 'inbound': '📥', 'outgoing': '📤', 'outbound': '📤', 'internal': '🏠'}
     display_df['direction'] = display_df['direction'].apply(lambda x: dir_map.get(str(x).lower(), '❓'))
     display_df['billsec'] = display_df['billsec'].apply(format_mmss)
