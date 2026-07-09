@@ -390,12 +390,24 @@ if prompts:
     # --- Подраздел: Синонимы полей ---
     st.header("Синонимы полей (названия колонок и показателей)")
 
-    # Базовые колонки
-    base_columns = ["calldate", "direction", "duration", "billsec", "politeness_score", "client_sentiment", "call_purpose", "operator_name", "client_number"]
-
-    # Получаем динамические ключи из БД для этого промпта
+    # Получаем динамические ключи и колонки из БД
     with get_pg_connection() as conn:
         cur = conn.cursor()
+
+        # 1. Получаем реальные колонки из таблиц calls и evaluations
+        cur.execute("""
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_name IN ('calls', 'evaluations')
+            AND table_schema = 'public'
+            AND column_name NOT IN ('linkedid', 'prompt_id', 'file_path', 'processing_status', 'processing_duration', 'created_at')
+        """)
+        db_columns = [r[0] for r in cur.fetchall()]
+
+        # Добавляем вычисляемые поля, которые используются в отчетах
+        virtual_columns = ["operator_name", "client_number"]
+
+        # 2. Получаем динамические ключи из JSON для этого промпта
         cur.execute("""
             SELECT checklist_json, metrics_json
             FROM evaluations
@@ -409,7 +421,7 @@ if prompts:
             if r[0]: json_keys.update([f"checklist.{k}" for k in r[0].keys()])
             if r[1]: json_keys.update([f"metrics.{k}" for k in r[1].keys()])
 
-        all_tech_names = sorted(base_columns + list(json_keys))
+        all_tech_names = sorted(list(set(db_columns + virtual_columns + list(json_keys))))
 
         # Получаем текущие синонимы из БД
         db_synonyms = get_cached_synonyms(mapping_prompt_id)
