@@ -94,6 +94,7 @@ CREATE TABLE evaluations (
     call_summary      TEXT,
     checklist_json    JSONB DEFAULT '{}',
     metrics_json      JSONB DEFAULT '{}',
+    rating            SMALLINT DEFAULT 0,
     created_at        TIMESTAMP DEFAULT now(),
     PRIMARY KEY (linkedid, prompt_id)
 );
