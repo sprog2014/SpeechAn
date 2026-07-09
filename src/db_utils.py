@@ -721,20 +721,43 @@ def build_case_sql(column, mapping_list, default_label):
     sql += f"ELSE COALESCE(e.{column}, '{default_label_esc}') END"
     return sql
 
-def insert_evaluation(linkedid, prompt_id, result_json, conn=None):
+def get_rating_from_mysql(linkedid):
+    """
+    Получает оценку (rating) из таблицы bitpbx.evaluation_reports по linkedid.
+    Если ничего не найдено или произошла ошибка, возвращает 0.
+    """
+    try:
+        with get_mysql_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT value
+                FROM bitpbx.evaluation_reports
+                WHERE linkedid = %s
+                LIMIT 1
+            """, (linkedid,))
+            row = cursor.fetchone()
+            if row and row[0] is not None:
+                return int(row[0])
+            return 0
+    except Exception as e:
+        logging.error(f"Error fetching rating for {linkedid}: {e}")
+        return 0
+
+def insert_evaluation(linkedid, prompt_id, result_json, rating=0, conn=None):
     def _execute(c):
         cur = c.cursor()
         cur.execute("""
             INSERT INTO evaluations (linkedid, prompt_id, politeness_score, client_sentiment,
-                                     call_purpose, call_summary, checklist_json, metrics_json)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                                     call_purpose, call_summary, checklist_json, metrics_json, rating)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (linkedid, prompt_id) DO UPDATE SET
                 politeness_score = EXCLUDED.politeness_score,
                 client_sentiment = EXCLUDED.client_sentiment,
                 call_purpose = EXCLUDED.call_purpose,
                 call_summary = EXCLUDED.call_summary,
                 checklist_json = EXCLUDED.checklist_json,
-                metrics_json = EXCLUDED.metrics_json
+                metrics_json = EXCLUDED.metrics_json,
+                rating = EXCLUDED.rating
         """, (
             linkedid,
             prompt_id,
@@ -743,7 +766,8 @@ def insert_evaluation(linkedid, prompt_id, result_json, conn=None):
             result_json.get('call_purpose'),
             result_json.get('call_summary'),
             json.dumps(result_json.get('checklist', {})),
-            json.dumps(result_json.get('metrics', {}))
+            json.dumps(result_json.get('metrics', {})),
+            rating
         ))
         c.commit()
 

@@ -6,7 +6,7 @@ from db_utils import (
     insert_evaluation, set_call_done, set_call_error, set_processing_duration,
     insert_processing_stats, check_phone_usage, get_system_setting,
     is_phone_registered, set_call_status, format_dialogue, get_call_transcript,
-    get_call_status, get_aggregated_asr_metrics
+    get_call_status, get_aggregated_asr_metrics, get_rating_from_mysql
 )
 from llm_analysis import analyze_transcript
 from logging_utils import setup_logging
@@ -76,7 +76,10 @@ def process_llm(linkedid: str, prompt_id: int, analyze_all: bool = False):
                     eval_result['metrics'] = {}
                 eval_result['metrics'].update(asr_metrics)
 
-            insert_evaluation(linkedid, prompt_id, eval_result, conn=pg_conn)
+            # 7. Get rating from MySQL
+            rating = get_rating_from_mysql(linkedid)
+
+            insert_evaluation(linkedid, prompt_id, eval_result, rating=rating, conn=pg_conn)
 
             duration = time.time() - start_time
             set_call_done(linkedid, conn=pg_conn)

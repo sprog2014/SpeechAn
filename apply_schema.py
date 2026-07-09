@@ -72,6 +72,9 @@ def apply_schema_updates():
                 IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='transcripts' AND column_name='wpm') THEN
                     ALTER TABLE transcripts ADD COLUMN wpm INT;
                 END IF;
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='evaluations' AND column_name='rating') THEN
+                    ALTER TABLE evaluations ADD COLUMN rating SMALLINT DEFAULT 0;
+                END IF;
             END $$;
         """)
 
