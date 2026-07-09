@@ -236,12 +236,21 @@ def get_report_data(start_date, end_date, prompt_id, filters, agg_col, agg_type,
         LEFT JOIN phones p ON p.number = (CASE WHEN c.direction = 'incoming' THEN c.answeredext ELSE c.src END)
         WHERE {where_str}
         ORDER BY c.calldate DESC
-        LIMIT 1000
+        LIMIT 10000
     """
 
     with engine.connect() as conn:
         df_agg = pd.read_sql(text(query_agg), conn, params=params)
         df_details = pd.read_sql(text(query_details), conn, params=params)
+
+    # Сохраняем сырые значения для точной фильтрации при клике
+    df_agg['x_val_raw'] = df_agg['x_val']
+    if 'color_val' in df_agg.columns:
+        df_agg['color_val_raw'] = df_agg['color_val']
+
+    df_details['x_val_raw'] = df_details['x_val']
+    if 'color_val' in df_details.columns:
+        df_details['color_val_raw'] = df_details['color_val']
 
     # 5. Преобразование форматов (напр. YYYY-MM-DD -> DD.MM)
     import re
@@ -632,7 +641,8 @@ else:
         'color_val': format_col_name(settings.get("color_col")) if settings.get("color_col") else None
     }
     color_p = "color_val" if settings.get("color_col") else None
-    cd_cols = ['x_val', 'color_val'] if color_p else ['x_val']
+    # Используем _raw колонки для custom_data, чтобы фильтрация при клике была точной
+    cd_cols = ['x_val_raw', 'color_val_raw'] if color_p else ['x_val_raw']
 
     # Общая предобработка данных для всех типов графиков
     df_agg['x_val'] = df_agg['x_val'].fillna("Не определено").astype(str).str.strip()
@@ -740,31 +750,18 @@ else:
     if selected_points and selected_points.selection.get("points"):
         point = selected_points.selection["points"][0]
 
-        # Извлекаем данные из customdata для точной фильтрации
+        # Извлекаем сырые данные из customdata для максимально точной фильтрации
         custom_data = point.get("customdata", [None, None])
-        x_val = custom_data[0]
-        color_val = custom_data[1] if len(custom_data) > 1 else None
+        x_val_raw = custom_data[0]
+        color_val_raw = custom_data[1] if len(custom_data) > 1 else None
 
-        if x_val is not None:
-            filtered_selection = filtered_selection[filtered_selection['x_val'].astype(str) == str(x_val)]
+        if x_val_raw is not None:
+            # Фильтруем по сохраненной в df_details сырой колонке
+            filtered_selection = filtered_selection[filtered_selection['x_val_raw'].astype(str) == str(x_val_raw)]
 
-        if color_val is not None:
-            # Для color_val мы также применяли маппинг ДА/НЕТ,
-            # поэтому при фильтрации нужно быть внимательными.
-            # В df_details color_val — это исходное значение из БД.
-            # Но для согласованности мы можем применить тот же маппинг к df_details перед фильтрацией
-            # или использовать обратный маппинг.
-            # Проще всего привести обе стороны к строке и сравнить.
-
-            # Предварительно обработаем df_details['color_val'] так же, как df_agg
-            temp_color = filtered_selection['color_val'].fillna("Не определено").astype(str).str.strip()
-
-            # Применяем маппинг ДА/НЕТ к деталям для корректного сравнения с выбранным сегментом
-            if settings["color_col"] and (settings["color_col"].startswith("checklist.") or settings["color_col"].startswith("metrics.")):
-                bool_map = {'1': 'ДА', '1.0': 'ДА', 'true': 'ДА', '0': 'НЕТ', '0.0': 'НЕТ', 'false': 'НЕТ'}
-                temp_color = temp_color.map(lambda x: bool_map.get(str(x).lower(), x))
-
-            filtered_selection = filtered_selection[temp_color == str(color_val)]
+        if color_val_raw is not None:
+            # Фильтруем по сохраненной в df_details сырой колонке
+            filtered_selection = filtered_selection[filtered_selection['color_val_raw'].astype(str) == str(color_val_raw)]
 
     st.markdown("---")
     st.subheader(f"Список звонков ({len(filtered_selection)})")
