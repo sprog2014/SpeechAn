@@ -22,7 +22,6 @@ if not st.session_state.get("password_correct", False):
     st.stop()
 
 st.set_page_config(page_title="Конструктор отчетов", layout="wide")
-st.title("Конструктор отчетов")
 
 @st.cache_resource
 def get_engine():
@@ -171,7 +170,9 @@ def get_report_data(start_date, end_date, prompt_id, filters, agg_col, agg_type,
     elif agg_type == "Сумма":
         y_sql = f"SUM({get_sql_col(y_axis_col, as_numeric=True)})"
     elif agg_type == "Среднее":
-        y_sql = f"ROUND(AVG({get_sql_col(y_axis_col, as_numeric=True)}), 2)"
+        # Не считаем пустые (NULL) и нулевые значения
+        col_expr = get_sql_col(y_axis_col, as_numeric=True)
+        y_sql = f"ROUND(AVG(NULLIF({col_expr}, 0)), 2)"
     elif agg_type == "Процент":
         y_sql = "COUNT(*)" # Процент посчитаем в пандасе из долей
 
@@ -187,9 +188,9 @@ def get_report_data(start_date, end_date, prompt_id, filters, agg_col, agg_type,
     if sort_axis == "y_val" and color_col:
         # Используем оконную функцию, чтобы получить общую величину всего X-значения для сортировки
         if agg_type == "Среднее":
-            # Для среднего по группе X мы считаем взвешенное среднее по всем сегментам
+            # Для среднего по группе X мы считаем взвешенное среднее по всем сегментам, исключая нули
             col_num = get_sql_col(y_axis_col, as_numeric=True)
-            y_sort_expr = f"SUM(SUM({col_num})) OVER(PARTITION BY {x_sql}) / NULLIF(SUM(COUNT({col_num})) OVER(PARTITION BY {x_sql}), 0)"
+            y_sort_expr = f"SUM(SUM({col_num})) OVER(PARTITION BY {x_sql}) / NULLIF(SUM(COUNT(NULLIF({col_num}, 0))) OVER(PARTITION BY {x_sql}), 0)"
         elif agg_type == "Процент":
             y_sort_expr = f"SUM(COUNT(*)) OVER(PARTITION BY {x_sql})"
         elif agg_type == "Сумма":
@@ -571,7 +572,7 @@ with st.sidebar:
     y_axis_col = None
     if agg_type in ["Сумма", "Среднее"]:
         # Для Y-оси оставляем только числовые поля
-        y_axis_options = [c for c in all_available_columns if c in ["duration", "billsec", "politeness_score", "billsec", "rating"] or c.startswith("metrics.") or c.startswith("checklist.")]
+        y_axis_options = [c for c in all_available_columns if c in ["duration", "billsec", "politeness_score", "rating"] or c.startswith("metrics.") or c.startswith("checklist.")]
         saved_y_axis = st.session_state.viz_settings.get("y_axis_col")
         y_axis_col = st.selectbox("Поле для расчета", y_axis_options,
                                   index=y_axis_options.index(saved_y_axis) if saved_y_axis in y_axis_options else 0,
@@ -702,7 +703,21 @@ except Exception as e:
 if df_agg.empty:
     st.info("Данные не найдены.")
 else:
-    title_prefix = f"Отчет: {settings['report_name']}" if settings.get('report_name') else "Конструктор отчетов"
+    # Формирование динамического заголовка
+    # Тип агрегации (Y-ось) + [Сегментация или Поле расчета] + "по" + Группировка (X-ось)
+    agg_label = settings["agg_type"]
+
+    # Второе слово: Сегментация (Цвет), если нет - Поле для расчета (для суммы и среднего)
+    second_word = ""
+    if settings.get("color_col"):
+        second_word = format_col_name(settings["color_col"], settings["prompt_id"])
+    elif settings.get("y_axis_col") and settings["agg_type"] in ["Сумма", "Среднее"]:
+        second_word = format_col_name(settings["y_axis_col"], settings["prompt_id"])
+
+    x_label = format_col_name(settings["agg_col"], settings["prompt_id"])
+
+    dynamic_title = f"{agg_label} {second_word}".strip() + f" по {x_label}"
+    title_prefix = f"Отчет: {settings['report_name']} ({dynamic_title})" if settings.get('report_name') else dynamic_title
 
     fig = None
     labels_map = {
@@ -807,7 +822,7 @@ else:
         fig = px.area(df_agg, x='x_val', y='y_val', color=color_p, labels=labels_map, custom_data=cd_cols)
         fig.update_layout(xaxis=dict(type='category', categoryorder='trace'))
 
-    st.subheader(f"{title_prefix}: {settings['agg_type']} по {format_col_name(settings['agg_col'], settings['prompt_id'])}")
+    st.subheader(title_prefix)
 
     selected_points = st.plotly_chart(
         fig,
