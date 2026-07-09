@@ -4,7 +4,6 @@ import torch
 import torchaudio
 import time
 import numpy as np
-import noisereduce as nr
 from db_utils import (
     fetch_call_metadata, upsert_call, insert_transcript, get_pg_connection,
     check_transcript_exists, set_call_status, get_call_status
@@ -14,26 +13,6 @@ from logging_utils import setup_logging
 
 setup_logging()
 logger = logging.getLogger(__name__)
-
-def denoise_waveform(waveform: torch.Tensor, sample_rate: int = 16000) -> torch.Tensor:
-    """
-    Подавление шума с помощью noisereduce.
-    """
-    if waveform.shape[-1] == 0:
-        return waveform
-
-    try:
-        # noisereduce работает с numpy массивами
-        wav_np = waveform.numpy()
-
-        # Выполняем подавление шума
-        # prop_decrease=0.8 позволяет сохранить естественность речи, убирая большую часть шума
-        denoised_np = nr.reduce_noise(y=wav_np, sr=sample_rate, prop_decrease=0.8)
-
-        return torch.from_numpy(denoised_np)
-    except Exception as e:
-        logger.error(f"Error during noise reduction: {e}")
-        return waveform
 
 def normalize_waveform_rms(waveform: torch.Tensor, target_rms: float = 0.05, max_gain: float = 8.0) -> tuple[torch.Tensor, float]:
     """
@@ -109,11 +88,6 @@ def process_asr(file_path: str):
             else:
                 left_waveform = waveform[0]
                 right_waveform = waveform[1]
-
-            # Очистка шума
-            logger.info(f"[{linkedid}] Denoising...")
-            left_waveform = denoise_waveform(left_waveform, sr)
-            right_waveform = denoise_waveform(right_waveform, sr)
 
             # RMS-нормализация
             logger.info(f"[{linkedid}] Normalizing (RMS)...")
