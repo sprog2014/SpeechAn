@@ -576,6 +576,38 @@ def update_evaluations_value(prompt_id, column, old_value, new_value, conn=None)
         with get_pg_connection() as conn:
             _execute(conn)
 
+def get_field_synonyms(prompt_id, conn=None):
+    def _execute(c):
+        cur = c.cursor(cursor_factory=RealDictCursor)
+        cur.execute("SELECT technical_name, synonym FROM field_synonyms WHERE prompt_id = %s", (prompt_id,))
+        rows = cur.fetchall()
+        return {r['technical_name']: r['synonym'] for r in rows}
+
+    if conn:
+        return _execute(conn)
+    else:
+        with get_pg_connection() as conn:
+            return _execute(conn)
+
+def set_field_synonyms(prompt_id, synonyms_dict, conn=None):
+    def _execute(c):
+        cur = c.cursor()
+        # Удаляем старые и вставляем новые
+        cur.execute("DELETE FROM field_synonyms WHERE prompt_id = %s", (prompt_id,))
+        for tech_name, syn in synonyms_dict.items():
+            if syn and str(syn).strip():
+                cur.execute("""
+                    INSERT INTO field_synonyms (prompt_id, technical_name, synonym)
+                    VALUES (%s, %s, %s)
+                """, (prompt_id, tech_name, syn))
+        c.commit()
+
+    if conn:
+        _execute(conn)
+    else:
+        with get_pg_connection() as conn:
+            _execute(conn)
+
 def set_call_status(linkedid, status, conn=None):
     def _execute(c):
         cur = c.cursor()

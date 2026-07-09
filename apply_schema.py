@@ -58,6 +58,16 @@ def apply_schema_updates():
             );
         """)
 
+        print("Creating field_synonyms table if not exists...")
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS field_synonyms (
+                prompt_id INT NOT NULL REFERENCES prompts(id) ON DELETE CASCADE,
+                technical_name VARCHAR(100) NOT NULL,
+                synonym VARCHAR(255) NOT NULL,
+                PRIMARY KEY (prompt_id, technical_name)
+            );
+        """)
+
         print("Creating JSONB GIN indexes if they do not exist...")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_evals_checklist_gin ON evaluations USING GIN (checklist_json);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_evals_metrics_gin ON evaluations USING GIN (metrics_json);")

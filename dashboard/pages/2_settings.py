@@ -17,10 +17,15 @@ from db_utils import (
     get_pg_connection, get_all_phones, update_phone_use, sync_phones_from_external_db,
     get_system_setting, set_system_setting,
     get_all_tasks, add_task, delete_task,
-    get_value_mappings, set_value_mappings, update_evaluations_value
+    get_value_mappings, set_value_mappings, update_evaluations_value,
+    get_field_synonyms, set_field_synonyms
 )
 from llm_analysis import check_prompt
 from config import PG_CONFIG
+
+@st.cache_data(ttl=60)
+def get_cached_synonyms(prompt_id):
+    return get_field_synonyms(prompt_id)
 
 if not st.session_state.get("password_correct", False):
     st.error("Пожалуйста, авторизуйтесь на главной странице.")
@@ -381,6 +386,66 @@ if prompts:
 
         if not has_invalid:
             st.success("Все значения соответствуют настройкам!")
+
+    # --- Подраздел: Синонимы полей ---
+    st.header("Синонимы полей (названия колонок и показателей)")
+
+    # Базовые колонки
+    base_columns = ["calldate", "direction", "duration", "billsec", "politeness_score", "client_sentiment", "call_purpose", "operator_name", "client_number"]
+
+    # Получаем динамические ключи из БД для этого промпта
+    with get_pg_connection() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT checklist_json, metrics_json
+            FROM evaluations
+            WHERE prompt_id = %s
+            LIMIT 50
+        """, (mapping_prompt_id,))
+        rows = cur.fetchall()
+
+        json_keys = set()
+        for r in rows:
+            if r[0]: json_keys.update([f"checklist.{k}" for k in r[0].keys()])
+            if r[1]: json_keys.update([f"metrics.{k}" for k in r[1].keys()])
+
+        all_tech_names = sorted(base_columns + list(json_keys))
+
+        # Получаем текущие синонимы из БД
+        db_synonyms = get_cached_synonyms(mapping_prompt_id)
+
+        # Подготавливаем данные для таблицы
+        synonyms_data = []
+        for tn in all_tech_names:
+            synonyms_data.append({
+                "technical_name": tn,
+                "synonym": db_synonyms.get(tn, "")
+            })
+
+        df_synonyms = pd.DataFrame(synonyms_data)
+
+        st.write(f"Настройте синонимы для промпта: **{prompt_options_map[mapping_prompt_id]}**")
+        edited_synonyms = st.data_editor(
+            df_synonyms,
+            column_config={
+                "technical_name": st.column_config.TextColumn("Техническое имя", disabled=True),
+                "synonym": st.column_config.TextColumn("Синоним (человекочитаемое имя)")
+            },
+            hide_index=True,
+            width='stretch',
+            key=f"synonyms_editor_{mapping_prompt_id}"
+        )
+
+        if st.button("Сохранить синонимы"):
+            new_synonyms = {}
+            for _, row in edited_synonyms.iterrows():
+                if pd.notna(row['synonym']) and str(row['synonym']).strip():
+                    new_synonyms[row['technical_name']] = str(row['synonym']).strip()
+            set_field_synonyms(mapping_prompt_id, new_synonyms)
+            st.cache_data.clear() # Сбрасываем кэш, чтобы увидеть изменения
+            st.success("Синонимы сохранены!")
+            st.rerun()
+
 else:
     st.info("Добавьте хотя бы один промпт для настройки значений.")
 
