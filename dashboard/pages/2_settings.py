@@ -12,11 +12,11 @@ SRC_DIR = os.path.join(PROJECT_ROOT, 'src')
 if SRC_DIR not in sys.path:
     sys.path.append(SRC_DIR)
 
+from db_utils import get_system_setting, set_system_setting
 from db_utils import (
     get_system_running_status, set_system_running_status,
     get_all_prompts, upsert_prompt, delete_prompt, set_default_prompt,
     get_pg_connection, get_all_phones, update_phone_use, sync_phones_from_external_db,
-    get_system_setting, set_system_setting,
     get_all_tasks, add_task, delete_task,
     get_value_mappings, set_value_mappings, update_evaluations_value,
     get_field_synonyms, set_field_synonyms
