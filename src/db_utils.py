@@ -467,7 +467,7 @@ def set_system_running_status(is_running, conn=None):
 def get_all_prompts(conn=None):
     def _execute(c):
         cur = c.cursor(cursor_factory=RealDictCursor)
-        cur.execute("SELECT id, name, prompt_text, is_default, created_at FROM prompts ORDER BY id ASC")
+        cur.execute("SELECT id, name, prompt_text, is_default, schema_json, created_at FROM prompts ORDER BY id ASC")
         return cur.fetchall()
 
     if conn:
@@ -490,23 +490,26 @@ def is_phone_registered(number, conn=None):
         with get_pg_connection() as conn:
             return _execute(conn)
 
-def upsert_prompt(name, prompt_text, is_default=False, prompt_id=None, conn=None):
+def upsert_prompt(name, prompt_text, is_default=False, prompt_id=None, schema_json=None, conn=None):
     def _execute(c):
         cur = c.cursor()
+        schema_val = schema_json if schema_json else '[]'
+        if isinstance(schema_val, list) or isinstance(schema_val, dict):
+            schema_val = json.dumps(schema_val, ensure_ascii=False)
         if prompt_id:
             if is_default:
                 cur.execute("UPDATE prompts SET is_default = FALSE WHERE is_default = TRUE")
             cur.execute("""
-                UPDATE prompts SET name=%s, prompt_text=%s, is_default=%s
+                UPDATE prompts SET name=%s, prompt_text=%s, is_default=%s, schema_json=%s
                 WHERE id=%s
-            """, (name, prompt_text, is_default, prompt_id))
+            """, (name, prompt_text, is_default, schema_val, prompt_id))
         else:
             if is_default:
                 cur.execute("UPDATE prompts SET is_default = FALSE WHERE is_default = TRUE")
             cur.execute("""
-                INSERT INTO prompts (name, prompt_text, is_default)
-                VALUES (%s, %s, %s)
-            """, (name, prompt_text, is_default))
+                INSERT INTO prompts (name, prompt_text, is_default, schema_json)
+                VALUES (%s, %s, %s, %s)
+            """, (name, prompt_text, is_default, schema_val))
         c.commit()
 
     if conn:
@@ -647,7 +650,7 @@ def insert_transcript(linkedid, channel, start, end, text, diction=None, wpm=Non
 def get_default_prompt(conn=None):
     def _execute(c):
         cur = c.cursor(cursor_factory=RealDictCursor)
-        cur.execute("SELECT id, prompt_text FROM prompts WHERE is_default = TRUE LIMIT 1")
+        cur.execute("SELECT id, prompt_text, schema_json FROM prompts WHERE is_default = TRUE LIMIT 1")
         return cur.fetchone()
 
     if conn:
@@ -659,7 +662,7 @@ def get_default_prompt(conn=None):
 def get_prompt_by_id(prompt_id, conn=None):
     def _execute(c):
         cur = c.cursor(cursor_factory=RealDictCursor)
-        cur.execute("SELECT id, prompt_text FROM prompts WHERE id = %s", (prompt_id,))
+        cur.execute("SELECT id, prompt_text, schema_json FROM prompts WHERE id = %s", (prompt_id,))
         return cur.fetchone()
 
     if conn:

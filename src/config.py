@@ -31,8 +31,8 @@ MYSQL_CONFIG = {
 
 RECORDS_ROOT = os.getenv("RECORDS_ROOT", "/mnt/rec")
 NUM_ASR_WORKERS = int(os.getenv("NUM_ASR_WORKERS", 3))
-NUM_LLM_WORKERS = int(os.getenv("NUM_LLM_WORKERS", 3))
-NUM_WORKERS = int(os.getenv("NUM_WORKERS", 6))
+NUM_LLM_WORKERS = int(os.getenv("NUM_LLM_WORKERS", 2))
+NUM_WORKERS = int(os.getenv("NUM_WORKERS", 5))
 OMP_NUM_THREADS = os.getenv("OMP_NUM_THREADS", "10")
 
 WEB_USER = os.getenv("WEB_USER", "admin")

@@ -67,7 +67,18 @@ def process_llm(linkedid: str, prompt_id: int, analyze_all: bool = False):
                 return True
 
             # 5. LLM Analysis
-            eval_result = analyze_transcript(full_dialogue, prompt_template=prompt_data['prompt_text'])
+            import json
+            schema_fields = None
+            if 'schema_json' in prompt_data and prompt_data['schema_json']:
+                try:
+                    if isinstance(prompt_data['schema_json'], str):
+                        schema_fields = json.loads(prompt_data['schema_json'])
+                    else:
+                        schema_fields = prompt_data['schema_json']
+                except Exception as e:
+                    logger.error(f"[{linkedid}] Failed to parse schema_json: {e}")
+
+            eval_result = analyze_transcript(full_dialogue, prompt_template=prompt_data['prompt_text'], schema_fields=schema_fields)
 
             # 6. Merge ASR Metrics (calculated from transcripts table)
             asr_metrics = get_aggregated_asr_metrics(linkedid, conn=pg_conn)

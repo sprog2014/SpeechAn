@@ -4,8 +4,6 @@ import logging
 import warnings
 import gigaam
 import torch
-from transformers import AutoTokenizer, TextIteratorStreamer
-from optimum.intel.openvino import OVModelForCausalLM
 
 # Подавляем FutureWarning от torch/gigaam
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -21,7 +19,6 @@ _vad_utils = None
 _vad_lock = threading.Lock()
 
 _llm_model = None
-_llm_tokenizer = None
 _llm_lock = threading.Lock()
 
 def get_asr_model():
@@ -57,90 +54,94 @@ def get_vad_model():
                 raise
     return _vad_model, _vad_utils
 
-class OpenVINOLLM:
-    def __init__(self, model, tokenizer):
-        self.model = model
-        self.tokenizer = tokenizer
+class LlamaWrapper:
+    def __init__(self, llama_model):
+        self.model = llama_model
 
-    def create_chat_completion(self, messages, max_tokens=1000, temperature=0.1, stream=False, **kwargs):
-        # Эмулируем интерфейс llama-cpp для минимизации правок в вызывающем коде
-        prompt = self.tokenizer.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=True
-        )
-        inputs = self.tokenizer(prompt, return_tensors="pt")
-
+    def create_chat_completion(self, messages, max_tokens=2048, temperature=0.1, stream=False, **kwargs):
         if stream:
-            streamer = TextIteratorStreamer(self.tokenizer, skip_prompt=True, skip_special_tokens=True)
-            generation_kwargs = dict(
-                **inputs,
-                streamer=streamer,
-                max_new_tokens=max_tokens,
-                do_sample=temperature > 0,
-                temperature=temperature if temperature > 0 else 1.0,
-                top_p=0.9,
-                pad_token_id=self.tokenizer.eos_token_id
+            # Возвращаем генератор, выдающий только текстовые фрагменты
+            response_iter = self.model.create_chat_completion(
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                stream=True,
+                **kwargs
             )
-            thread = threading.Thread(target=self.model.generate, kwargs=generation_kwargs)
-            logger.info("Starting LLM generation thread for streaming...")
-            thread.start()
-            return streamer
+            def chunk_generator():
+                for chunk in response_iter:
+                    choices = chunk.get('choices', [])
+                    if choices:
+                        delta = choices[0].get('delta', {})
+                        if 'content' in delta:
+                            yield delta['content']
+            return chunk_generator()
+        else:
+            return self.model.create_chat_completion(
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                stream=False,
+                **kwargs
+            )
 
-        output_ids = self.model.generate(
-            **inputs,
-            max_new_tokens=max_tokens,
-            do_sample=temperature > 0,
-            temperature=temperature if temperature > 0 else 1.0,
-            top_p=0.9,
-            pad_token_id=self.tokenizer.eos_token_id
-        )
-
-        generated_ids = output_ids[0][len(inputs.input_ids[0]):]
-        response_text = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
-
-        return {
-            'choices': [
-                {
-                    'message': {
-                        'content': response_text
-                    }
-                }
-            ]
-        }
-
-    def generate(self, messages, max_new_tokens=1000, temperature=0.1):
-        # Сохраняем прямой метод для явного использования
+    def generate(self, messages, max_new_tokens=2048, temperature=0.1):
         result = self.create_chat_completion(messages, max_tokens=max_new_tokens, temperature=temperature)
         return result['choices'][0]['message']['content']
 
 def get_llm():
-    global _llm_model, _llm_tokenizer
+    global _llm_model
     with _llm_lock:
         if _llm_model is None:
-            model_path = os.getenv("LLM_MODEL_PATH", "models/qwen2.5-7b-instruct-ov")
+            import llama_cpp
+            from db_utils import get_system_setting
 
-            logger.info(f"Initializing Qwen2.5 OpenVINO model from {model_path}...")
+            active_model = get_system_setting('active_model', 'q4_k_m')
 
-            if os.path.exists(model_path) and os.path.isdir(model_path):
-                try:
-                    logger.info("Loading model from local path...")
-                    _llm_model = OVModelForCausalLM.from_pretrained(
-                        model_path,
-                        device="CPU",
-                        ov_config={"PERFORMANCE_HINT": "LATENCY"}
-                    )
-                    _llm_tokenizer = AutoTokenizer.from_pretrained(model_path, fix_mistral_regex=True)
-                    logger.info("Qwen2.5 OpenVINO model loaded successfully")
-                except Exception as e:
-                    logger.error(f"Failed to load Qwen2.5 OpenVINO model from {model_path}: {e}")
-                    raise
+            if active_model == 'q8_0':
+                model_filename = "qwen2.5-7b-instruct-q8_0.gguf"
             else:
-                error_msg = f"Model directory not found at {model_path}. Please run setup script or convert model manually."
-                logger.error(error_msg)
-                raise FileNotFoundError(error_msg)
+                model_filename = "qwen2.5-7b-instruct-q4_k_m.gguf"
 
-    return OpenVINOLLM(_llm_model, _llm_tokenizer)
+            possible_paths = [
+                f"models/{model_filename}",
+                f"/opt/calls/models/{model_filename}",
+                f"../models/{model_filename}"
+            ]
+
+            model_path = None
+            for path in possible_paths:
+                if os.path.exists(path):
+                    model_path = path
+                    break
+
+            if not model_path:
+                # Fallback к любому файлу .gguf в models/
+                if os.path.exists("models"):
+                    for f in os.listdir("models"):
+                        if f.endswith(".gguf"):
+                            model_path = os.path.join("models", f)
+                            break
+
+            if not model_path:
+                model_path = f"models/{model_filename}"
+
+            logger.info(f"Loading Llama model from {model_path} with n_ctx=16384, n_threads=20...")
+
+            try:
+                llama_instance = llama_cpp.Llama(
+                    model_path=model_path,
+                    n_ctx=16384,
+                    n_threads=20,
+                    verbose=False
+                )
+                _llm_model = LlamaWrapper(llama_instance)
+                logger.info("Llama model loaded successfully")
+            except Exception as e:
+                logger.error(f"Failed to load Llama model from {model_path}: {e}")
+                raise
+
+    return _llm_model
 
 def get_locked_llm():
     return get_llm()
