@@ -1,11 +1,9 @@
 pydub==0.25.1
 gigaam @ git+https://github.com/salute-developers/GigaAM.git
 --extra-index-url https://download.pytorch.org/whl/cpu
-torch>=2.5.0+cpu
-torchaudio>=2.5.0+cpu
-torchcodec>=0.13.0+cpu
-optimum>=1.20.0
-optimum-intel[openvino,nncf]>=1.16.0
+torch==2.5.1+cpu
+torchaudio==2.5.1+cpu
+torchcodec==0.13.0+cpu
 transformers>=4.42.0
 psycopg2-binary==2.9.9
 mysql-connector-python>=8.0.33
@@ -17,3 +15,6 @@ pandas==2.2.2
 plotly==5.22.0
 librosa==0.10.2
 soundfile==0.12.1
+pydantic>=2.0.0
+huggingface-hub
+llama-cpp-python

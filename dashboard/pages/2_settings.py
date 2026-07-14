@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import sys
 import os
+import json
 import subprocess
 from datetime import datetime, timedelta
 
@@ -20,7 +21,7 @@ from db_utils import (
     get_value_mappings, set_value_mappings, update_evaluations_value,
     get_field_synonyms, set_field_synonyms
 )
-from llm_analysis import check_prompt
+from llm_analysis import check_prompt, validate_chatml_template
 from config import PG_CONFIG
 
 @st.cache_data(ttl=60)
@@ -33,11 +34,14 @@ if not st.session_state.get("password_correct", False):
 
 st.title("Настройки и Управление")
 
-# --- Раздел 1: Состояние системы ---
+# --- Раздел 1: Состояние системы и выбор модели ---
 st.header("Состояние системы")
 is_running = get_system_running_status()
 
-col_status, col_btn = st.columns([3, 1])
+# Выбор активной модели
+active_model = get_system_setting('active_model', 'q4_k_m')
+col_status, col_btn, col_model = st.columns([2, 1, 1])
+
 if is_running:
     col_status.success("Система запущена и обрабатывает файлы.")
     if col_btn.button("Остановить"):
@@ -48,6 +52,12 @@ else:
     if col_btn.button("Запустить"):
         set_system_running_status(True)
         st.rerun()
+
+new_model = col_model.selectbox("Активная модель LLM", options=["q4_k_m", "q8_0"], index=0 if active_model == 'q4_k_m' else 1)
+if new_model != active_model:
+    set_system_setting('active_model', new_model)
+    st.success(f"Модель изменена на {new_model}!")
+    st.rerun()
 
 # --- Раздел 2: Управление промптами ---
 st.header("Управление промптами")
@@ -69,13 +79,50 @@ if st.session_state.show_editor:
     prompt = st.session_state.editing_prompt
     p_id = prompt['id'] if prompt else None
 
-    # Убираем st.form, так как он мешает поточному выводу в реальном времени
+    st.info("""
+    **Инструкция по составлению промпта в формате ChatML:**
+    * Промпт должен состоять из блоков `<|im_start|>system ... <|im_end|>` и `<|im_start|>user ... <|im_end|>`.
+    * Обязательно добавьте плейсхолдер `{transcript}` в месте, куда будет вставляться транскрипт звонка.
+    * Вы можете добавить плейсхолдер `{json_schema}` в месте, куда должна вставляться сгенерированная Pydantic JSON-схема. Если он отсутствует, схема будет автоматически добавлена в начало системного блока.
+    """)
+
     name = st.text_input("Название", value=prompt['name'] if prompt else "")
 
     col_text1, col_text2 = st.columns(2)
-    text = col_text1.text_area("Текст промпта", value=prompt['prompt_text'] if prompt else "", height=300)
-    # Сохраняем транскрипт в session_state
+    text = col_text1.text_area("Текст промпта (в формате ChatML)", value=prompt['prompt_text'] if prompt else "", height=300)
     st.session_state.test_transcript = col_text2.text_area("Тестовый транскрипт", value=st.session_state.test_transcript, height=300)
+
+    # Редактор Pydantic схемы
+    raw_schema = prompt['schema_json'] if prompt and 'schema_json' in prompt else '[]'
+    if not raw_schema:
+        raw_schema = '[]'
+    if isinstance(raw_schema, str):
+        try:
+            schema_data = json.loads(raw_schema)
+        except:
+            schema_data = []
+    else:
+        schema_data = raw_schema
+
+    df_schema = pd.DataFrame(schema_data)
+    if df_schema.empty or "key" not in df_schema.columns:
+        df_schema = pd.DataFrame(columns=["key", "type", "description"])
+
+    st.write("### Структура JSON-ответа (Pydantic Схема)")
+    st.write("Настройте ключи, типы и описания для формирования Pydantic модели:")
+
+    edited_schema_df = st.data_editor(
+        df_schema,
+        column_config={
+            "key": st.column_config.TextColumn("Имя ключа JSON", required=True),
+            "type": st.column_config.SelectboxColumn("Тип данных", options=["str", "bool", "num", "list", "dict", "enum"], required=True),
+            "description": st.column_config.TextColumn("Описание значения", required=True)
+        },
+        num_rows="dynamic",
+        key=f"schema_editor_{p_id if p_id else 'new'}",
+        hide_index=True,
+        width='stretch'
+    )
 
     col_f1, col_f2, col_f3, col_f4 = st.columns([1, 1, 1, 1])
     save_btn = col_f1.button("Сохранить", width='stretch')
@@ -84,12 +131,27 @@ if st.session_state.show_editor:
 
     if save_btn:
         if name and text:
-            upsert_prompt(name, text, is_default=prompt['is_default'] if prompt else False, prompt_id=p_id)
-            st.success("Сохранено!")
-            st.session_state.show_editor = False
-            st.session_state.editing_prompt = None
-            st.session_state.check_result = None
-            st.rerun()
+            # Валидация ChatML структуры
+            is_valid, err_msg = validate_chatml_template(text)
+            if not is_valid:
+                st.error(f"Ошибка валидации промпта: {err_msg}")
+            else:
+                # Превращаем DataFrame в список dict-ов для сохранения
+                new_schema_list = []
+                for _, row in edited_schema_df.iterrows():
+                    if pd.notna(row['key']) and str(row['key']).strip():
+                        new_schema_list.append({
+                            "key": str(row['key']).strip(),
+                            "type": str(row['type']).strip(),
+                            "description": str(row['description']).strip()
+                        })
+
+                upsert_prompt(name, text, is_default=prompt['is_default'] if prompt else False, prompt_id=p_id, schema_json=new_schema_list)
+                st.success("Сохранено!")
+                st.session_state.show_editor = False
+                st.session_state.editing_prompt = None
+                st.session_state.check_result = None
+                st.rerun()
         else:
             st.error("Название и текст не могут быть пустыми.")
 
@@ -101,15 +163,30 @@ if st.session_state.show_editor:
 
     if check_btn:
         if text:
-            with st.status("Выполняется анализ...", expanded=True) as status:
-                try:
-                    full_response = st.write_stream(check_prompt(text, st.session_state.test_transcript, stream=True))
-                    st.session_state.check_result = full_response
-                    status.update(label="Анализ завершен!", state="complete", expanded=False)
-                    st.rerun() # Перезапускаем, чтобы показать результат в финальном поле ниже
-                except Exception as e:
-                    status.update(label="Ошибка!", state="error")
-                    st.error(f"Ошибка при проверке: {e}")
+            # Валидация ChatML структуры
+            is_valid, err_msg = validate_chatml_template(text)
+            if not is_valid:
+                st.error(f"Ошибка валидации промпта: {err_msg}")
+            else:
+                with st.status("Выполняется анализ...", expanded=True) as status:
+                    try:
+                        # Формируем список полей для передачи в check_prompt
+                        new_schema_list = []
+                        for _, row in edited_schema_df.iterrows():
+                            if pd.notna(row['key']) and str(row['key']).strip():
+                                new_schema_list.append({
+                                    "key": str(row['key']).strip(),
+                                    "type": str(row['type']).strip(),
+                                    "description": str(row['description']).strip()
+                                })
+
+                        full_response = st.write_stream(check_prompt(text, st.session_state.test_transcript, stream=True, schema_fields=new_schema_list))
+                        st.session_state.check_result = full_response
+                        status.update(label="Анализ завершен!", state="complete", expanded=False)
+                        st.rerun()
+                    except Exception as e:
+                        status.update(label="Ошибка!", state="error")
+                        st.error(f"Ошибка при проверке: {e}")
         else:
             st.error("Текст промпта не может быть пустым.")
 

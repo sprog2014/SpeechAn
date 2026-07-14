@@ -47,10 +47,11 @@ CREATE TABLE prompts (
     name            VARCHAR(100) NOT NULL,
     prompt_text     TEXT NOT NULL,
     is_default      BOOLEAN DEFAULT FALSE,
+    schema_json     JSONB DEFAULT '[]',
     created_at      TIMESTAMP DEFAULT now()
 );
 
-INSERT INTO prompts (name, prompt_text, is_default) VALUES (
+INSERT INTO prompts (name, prompt_text, is_default, schema_json) VALUES (
     'Default Medical Call Analysis',
     'Ты — эксперт по контролю качества в медицинском колл-центре.
 Твоя задача — проанализировать диалог между оператором и клиентом.
@@ -82,7 +83,8 @@ INSERT INTO prompts (name, prompt_text, is_default) VALUES (
 Диалог:
 {transcript}
 ',
-    TRUE
+    TRUE,
+    '[{"key": "politeness_score", "type": "num", "description": "Оценка вежливости оператора от 0 до 10"}, {"key": "client_sentiment", "type": "str", "description": "Настроение клиента: positive, neutral, negative или conflict"}, {"key": "call_purpose", "type": "str", "description": "Цель звонка: appointment, consultation, complaint, cancel_appointment или other"}, {"key": "call_summary", "type": "str", "description": "Краткое содержание диалога (1-2 предложения)"}, {"key": "checklist", "type": "dict", "description": "Чек-лист: greeting (bool), introduced_himself (bool), identified_need (bool), informed_price (bool), agreed_datetime (bool), handled_objection (bool), farewell (bool)"}, {"key": "metrics", "type": "dict", "description": "Метрики звонка: interruptions_count (num), hold_time_sec (num), medication_mentioned (bool)"}]'
 );
 
 CREATE TABLE evaluations (
