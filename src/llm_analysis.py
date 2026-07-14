@@ -174,7 +174,11 @@ def analyze_transcript(transcript_text: str, prompt_template: str = None, schema
         output = llm.create_chat_completion(
             messages=messages,
             max_tokens=2048,
-            temperature=0.1
+            temperature=0.1,
+            response_format={
+                "type": "json_object",
+                "schema": ModelClass.model_json_schema()
+            }
         )
         response = output['choices'][0]['message']['content']
     except Exception as e:
@@ -239,7 +243,11 @@ def check_prompt(prompt_template: str, transcript_text: str, stream: bool = Fals
             messages=messages,
             max_tokens=2048,
             temperature=0.1,
-            stream=stream
+            stream=stream,
+            response_format={
+                "type": "json_object",
+                "schema": ModelClass.model_json_schema()
+            }
         )
         if stream:
             return output
