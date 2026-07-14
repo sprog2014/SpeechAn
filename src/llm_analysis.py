@@ -25,11 +25,11 @@ DEFAULT_CHATML_PROMPT = """<|im_start|>system
 Верни JSON-объект с результатами анализа.
 <|im_end|>"""
 
-def build_dynamic_model(schema_fields: List[Dict[str, Any]]):
+def build_dynamic_model(schema_data: Union[List[Dict[str, Any]], Dict[str, Any]]):
     """
-    Динамически конструирует Pydantic модель на основе списка полей из БД.
+    Динамически конструирует вложенную Pydantic модель на основе структуры из БД.
+    Поддерживает как старый плоский формат (list), так и новый вложенный (dict).
     """
-    fields = {}
     type_mapping = {
         'str': str,
         'bool': bool,
@@ -39,7 +39,49 @@ def build_dynamic_model(schema_fields: List[Dict[str, Any]]):
         'enum': str
     }
 
-    for field in schema_fields:
+    # Если это словарь с вложенной структурой
+    if isinstance(schema_data, dict) and any(k in schema_data for k in ['main', 'checklist', 'metrics']):
+        main_list = schema_data.get('main', [])
+        checklist_list = schema_data.get('checklist', [])
+        metrics_list = schema_data.get('metrics', [])
+
+        # 1. Сборка Чек-листа (только булевые значения)
+        chk_fields = {}
+        for f in checklist_list:
+            key = f.get('key')
+            if key:
+                chk_fields[key] = (bool, Field(description=f.get('description', '')))
+        ChecklistModel = create_model('Checklist', **chk_fields)
+
+        # 2. Сборка Метрик
+        met_fields = {}
+        for f in metrics_list:
+            key = f.get('key')
+            if key:
+                t_str = f.get('type', 'str')
+                py_type = type_mapping.get(t_str, Any)
+                met_fields[key] = (py_type, Field(description=f.get('description', '')))
+        MetricsModel = create_model('Metrics', **met_fields)
+
+        # 3. Сборка Главной модели
+        main_fields = {}
+        for f in main_list:
+            key = f.get('key')
+            if key:
+                t_str = f.get('type', 'str')
+                py_type = type_mapping.get(t_str, Any)
+                main_fields[key] = (py_type, Field(description=f.get('description', '')))
+
+        # Добавляем вложенные модели
+        main_fields['checklist'] = (ChecklistModel, Field(description="Чек-лист соответствия требованиям разговора"))
+        main_fields['metrics'] = (MetricsModel, Field(description="Количественные метрики и параметры разговора"))
+
+        return create_model('TextAnalysis', **main_fields)
+
+    # Старый плоский формат (list) - обратная совместимость
+    fields = {}
+    schema_list = schema_data if isinstance(schema_data, list) else []
+    for field in schema_list:
         key = field.get('key')
         if not key:
             continue
@@ -78,7 +120,6 @@ def parse_chatml_to_messages(chatml_text: str) -> list[dict]:
     """
     Парсит ChatML шаблон на список сообщений: [{"role": "system", "content": "..."}]
     """
-    # Находим все блоки <|im_start|>role\ncontent<|im_end|>
     pattern = r"<\|im_start\|>(\w+)\s+(.*?)(?:<\|im_end\|>|$)"
     matches = re.findall(pattern, chatml_text, re.DOTALL)
 
@@ -121,7 +162,7 @@ def extract_json_with_pydantic(text: str, model_class) -> dict:
                         continue
     return None
 
-def analyze_transcript(transcript_text: str, prompt_template: str = None, schema_fields: List[Dict[str, Any]] = None) -> dict:
+def analyze_transcript(transcript_text: str, prompt_template: str = None, schema_fields: Union[List[Dict[str, Any]], Dict[str, Any]] = None) -> dict:
     start_time = time.time()
     logger.info("Sending transcript to LLM for analysis via Chat Completion...")
 
@@ -129,15 +170,29 @@ def analyze_transcript(transcript_text: str, prompt_template: str = None, schema
 
     # 1. Построение Pydantic-модели и схемы
     if not schema_fields:
-        # Default fallback fields
-        schema_fields = [
-            {"key": "politeness_score", "type": "num", "description": "Оценка вежливости оператора от 0 до 10"},
-            {"key": "client_sentiment", "type": "str", "description": "Настроение клиента: positive, neutral, negative или conflict"},
-            {"key": "call_purpose", "type": "str", "description": "Цель звонка: appointment, consultation, complaint, cancel_appointment или other"},
-            {"key": "call_summary", "type": "str", "description": "Краткое содержание диалога (1-2 предложения)"},
-            {"key": "checklist", "type": "dict", "description": "Чек-лист: greeting (bool), introduced_himself (bool), identified_need (bool), informed_price (bool), agreed_datetime (bool), handled_objection (bool), farewell (bool)"},
-            {"key": "metrics", "type": "dict", "description": "Метрики звонка: interruptions_count (num), hold_time_sec (num), medication_mentioned (bool)"}
-        ]
+        # Default fallback nested fields
+        schema_fields = {
+            "main": [
+                {"key": "politeness_score", "type": "num", "description": "Оценка вежливости оператора от 0 до 10"},
+                {"key": "client_sentiment", "type": "str", "description": "Настроение клиента: positive, neutral, negative или conflict"},
+                {"key": "call_purpose", "type": "str", "description": "Цель звонка: appointment, consultation, complaint, cancel_appointment или other"},
+                {"key": "call_summary", "type": "str", "description": "Краткое содержание диалога (1-2 предложения)"}
+            ],
+            "checklist": [
+                {"key": "greeting", "type": "bool", "description": "Приветствие"},
+                {"key": "introduced_himself", "type": "bool", "description": "Представился"},
+                {"key": "identified_need", "type": "bool", "description": "Выявил потребность"},
+                {"key": "informed_price", "type": "bool", "description": "Сообщил стоимость"},
+                {"key": "agreed_datetime", "type": "bool", "description": "Согласовал дату/время"},
+                {"key": "handled_objection", "type": "bool", "description": "Отработал возражение"},
+                {"key": "farewell", "type": "bool", "description": "Прощание"}
+            ],
+            "metrics": [
+                {"key": "interruptions_count", "type": "num", "description": "Количество перебиваний"},
+                {"key": "hold_time_sec", "type": "num", "description": "Время удержания в секундах"},
+                {"key": "medication_mentioned", "type": "bool", "description": "Упоминание лекарств"}
+            ]
+        }
 
     ModelClass = build_dynamic_model(schema_fields)
     schema_json_str = json.dumps(ModelClass.model_json_schema(), indent=2, ensure_ascii=False)
@@ -151,7 +206,6 @@ def analyze_transcript(transcript_text: str, prompt_template: str = None, schema
         prompt_template = prompt_template.replace("{json_schema}", schema_json_str)
     else:
         # Если плейсхолдера нет, принудительно добавим в системный блок
-        # Для простоты найдем первый тег <|im_start|>system и вставим туда
         if "<|im_start|>system" in prompt_template:
             prompt_template = prompt_template.replace(
                 "<|im_start|>system",
@@ -164,7 +218,6 @@ def analyze_transcript(transcript_text: str, prompt_template: str = None, schema
     # 3. Парсинг ChatML в сообщения
     messages = parse_chatml_to_messages(user_message)
     if not messages:
-        # Fallback на случай, если ChatML не распознан
         messages = [
             {"role": "system", "content": f"Ожидаемая JSON схема:\n{schema_json_str}"},
             {"role": "user", "content": user_message}
@@ -198,7 +251,7 @@ def analyze_transcript(transcript_text: str, prompt_template: str = None, schema
     logger.info(f"LLM analysis successful. Keys found: {list(result.keys())}")
     return result
 
-def check_prompt(prompt_template: str, transcript_text: str, stream: bool = False, schema_fields: List[Dict[str, Any]] = None):
+def check_prompt(prompt_template: str, transcript_text: str, stream: bool = False, schema_fields: Union[List[Dict[str, Any]], Dict[str, Any]] = None):
     """Отправляет промпт на проверку и возвращает сырой текст или стример."""
     start_time = time.time()
     logger.info(f"Checking prompt via LLM (stream={stream})...")
@@ -207,14 +260,28 @@ def check_prompt(prompt_template: str, transcript_text: str, stream: bool = Fals
 
     # Построение схемы Pydantic
     if not schema_fields:
-        schema_fields = [
-            {"key": "politeness_score", "type": "num", "description": "Оценка вежливости оператора от 0 до 10"},
-            {"key": "client_sentiment", "type": "str", "description": "Настроение клиента: positive, neutral, negative или conflict"},
-            {"key": "call_purpose", "type": "str", "description": "Цель звонка: appointment, consultation, complaint, cancel_appointment или other"},
-            {"key": "call_summary", "type": "str", "description": "Краткое содержание диалога (1-2 предложения)"},
-            {"key": "checklist", "type": "dict", "description": "Чек-лист: greeting (bool), introduced_himself (bool), identified_need (bool), informed_price (bool), agreed_datetime (bool), handled_objection (bool), farewell (bool)"},
-            {"key": "metrics", "type": "dict", "description": "Метрики звонка: interruptions_count (num), hold_time_sec (num), medication_mentioned (bool)"}
-        ]
+        schema_fields = {
+            "main": [
+                {"key": "politeness_score", "type": "num", "description": "Оценка вежливости оператора от 0 до 10"},
+                {"key": "client_sentiment", "type": "str", "description": "Настроение клиента: positive, neutral, negative или conflict"},
+                {"key": "call_purpose", "type": "str", "description": "Цель звонка: appointment, consultation, complaint, cancel_appointment или other"},
+                {"key": "call_summary", "type": "str", "description": "Краткое содержание диалога (1-2 предложения)"}
+            ],
+            "checklist": [
+                {"key": "greeting", "type": "bool", "description": "Приветствие"},
+                {"key": "introduced_himself", "type": "bool", "description": "Представился"},
+                {"key": "identified_need", "type": "bool", "description": "Выявил потребность"},
+                {"key": "informed_price", "type": "bool", "description": "Сообщил стоимость"},
+                {"key": "agreed_datetime", "type": "bool", "description": "Согласовал дату/время"},
+                {"key": "handled_objection", "type": "bool", "description": "Отработал возражение"},
+                {"key": "farewell", "type": "bool", "description": "Прощание"}
+            ],
+            "metrics": [
+                {"key": "interruptions_count", "type": "num", "description": "Количество перебиваний"},
+                {"key": "hold_time_sec", "type": "num", "description": "Время удержания в секундах"},
+                {"key": "medication_mentioned", "type": "bool", "description": "Упоминание лекарств"}
+            ]
+        }
     ModelClass = build_dynamic_model(schema_fields)
     schema_json_str = json.dumps(ModelClass.model_json_schema(), indent=2, ensure_ascii=False)
 

@@ -75,32 +75,72 @@ def apply_schema_updates():
 
         print("Adding schema_json column to prompts if it does not exist...")
         cur.execute("""
-            ALTER TABLE prompts ADD COLUMN IF NOT EXISTS schema_json JSONB DEFAULT '[]';
+            ALTER TABLE prompts ADD COLUMN IF NOT EXISTS schema_json JSONB DEFAULT '{}';
         """)
 
         print("Checking default prompt schema_json initialization...")
-        cur.execute("SELECT schema_json FROM prompts WHERE id = 1;")
+        cur.execute("SELECT schema_json, prompt_text FROM prompts WHERE id = 1;")
         row = cur.fetchone()
 
-        default_schema = [
-            {"key": "politeness_score", "type": "num", "description": "Оценка вежливости оператора от 0 до 10"},
-            {"key": "client_sentiment", "type": "str", "description": "Настроение клиента: positive, neutral, negative или conflict"},
-            {"key": "call_purpose", "type": "str", "description": "Цель звонка: appointment, consultation, complaint, cancel_appointment или other"},
-            {"key": "call_summary", "type": "str", "description": "Краткое содержание диалога (1-2 предложения)"},
-            {"key": "checklist", "type": "dict", "description": "Чек-лист: greeting (bool), introduced_himself (bool), identified_need (bool), informed_price (bool), agreed_datetime (bool), handled_objection (bool), farewell (bool)"},
-            {"key": "metrics", "type": "dict", "description": "Метрики звонка: interruptions_count (num), hold_time_sec (num), medication_mentioned (bool)"}
-        ]
+        default_schema = {
+            "main": [
+                {"key": "politeness_score", "type": "num", "description": "Оценка вежливости оператора от 0 до 10"},
+                {"key": "client_sentiment", "type": "str", "description": "Настроение клиента: positive, neutral, negative или conflict"},
+                {"key": "call_purpose", "type": "str", "description": "Цель звонка: appointment, consultation, complaint, cancel_appointment или other"},
+                {"key": "call_summary", "type": "str", "description": "Краткое содержание диалога (1-2 предложения)"}
+            ],
+            "checklist": [
+                {"key": "greeting", "type": "bool", "description": "Приветствие"},
+                {"key": "introduced_himself", "type": "bool", "description": "Представился"},
+                {"key": "identified_need", "type": "bool", "description": "Выявил потребность"},
+                {"key": "informed_price", "type": "bool", "description": "Сообщил стоимость"},
+                {"key": "agreed_datetime", "type": "bool", "description": "Согласовал дату/время"},
+                {"key": "handled_objection", "type": "bool", "description": "Отработал возражение"},
+                {"key": "farewell", "type": "bool", "description": "Прощание"}
+            ],
+            "metrics": [
+                {"key": "interruptions_count", "type": "num", "description": "Количество перебиваний"},
+                {"key": "hold_time_sec", "type": "num", "description": "Время удержания в секундах"},
+                {"key": "medication_mentioned", "type": "bool", "description": "Упоминание лекарств"}
+            ]
+        }
+
+        default_prompt_text = """<|im_start|>system
+Ты — эксперт по контролю качества в медицинском колл-центре.
+Твоя задача — проанализировать диалог между оператором и клиентом.
+Результат анализа ты обязан выдать СТРОГО в формате JSON, соответствующем следующей схеме:
+{json_schema}
+
+Не добавляй никакого вступительного или заключительного текста, только один JSON объект.
+<|im_end|>
+<|im_start|>user
+Проанализируй следующий диалог:
+---
+{transcript}
+---
+Верни JSON-объект с результатами анализа.
+<|im_end|>"""
 
         if row is None:
-            # If default prompt (id=1) doesn't exist, we'll insert it (or let init.sql do it)
-            pass
-        elif not row[0] or row[0] == [] or row[0] == '[]':
-            print("Populating default prompt schema_json...")
+            # If default prompt (id=1) doesn't exist, we will insert it
             cur.execute("""
-                UPDATE prompts
-                SET schema_json = %s
-                WHERE id = 1
-            """, (json.dumps(default_schema, ensure_ascii=False),))
+                INSERT INTO prompts (id, name, prompt_text, is_default, schema_json)
+                VALUES (1, 'Default Medical Call Analysis', %s, TRUE, %s)
+                ON CONFLICT (id) DO UPDATE SET
+                    prompt_text = EXCLUDED.prompt_text,
+                    schema_json = EXCLUDED.schema_json
+            """, (default_prompt_text, json.dumps(default_schema, ensure_ascii=False)))
+        else:
+            schema_db = row[0]
+            # If the database schema_json is empty, list format, or not a dict containing 'main', reset to default nested format
+            if not schema_db or isinstance(schema_db, list) or not isinstance(schema_db, dict) or 'main' not in schema_db:
+                print("Populating default prompt schema_json and prompt_text with nested structure...")
+                cur.execute("""
+                    UPDATE prompts
+                    SET schema_json = %s,
+                        prompt_text = %s
+                    WHERE id = 1
+                """, (json.dumps(default_schema, ensure_ascii=False), default_prompt_text))
 
         print("Adding diction and wpm columns to transcripts if they do not exist...")
         cur.execute("""

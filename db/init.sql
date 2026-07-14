@@ -47,44 +47,30 @@ CREATE TABLE prompts (
     name            VARCHAR(100) NOT NULL,
     prompt_text     TEXT NOT NULL,
     is_default      BOOLEAN DEFAULT FALSE,
-    schema_json     JSONB DEFAULT '[]',
+    schema_json     JSONB DEFAULT '{}',
     created_at      TIMESTAMP DEFAULT now()
 );
 
-INSERT INTO prompts (name, prompt_text, is_default, schema_json) VALUES (
+INSERT INTO prompts (id, name, prompt_text, is_default, schema_json) VALUES (
+    1,
     'Default Medical Call Analysis',
-    'Ты — эксперт по контролю качества в медицинском колл-центре.
+    '<|im_start|>system
+Ты — эксперт по контролю качества в медицинском колл-центре.
 Твоя задача — проанализировать диалог между оператором и клиентом.
-Результат анализа ты обязан выдать СТРОГО в формате JSON.
+Результат анализа ты обязан выдать СТРОГО в формате JSON, соответствующем следующей схеме:
+{json_schema}
+
 Не добавляй никакого вступительного или заключительного текста, только один JSON объект.
-
-Формат JSON:
-{{
-  "politeness_score": число от 0 до 10,
-  "client_sentiment": "positive", "neutral", "negative" или "conflict",
-  "call_purpose": "appointment", "consultation", "complaint", "cancel_appointment" или "other",
-  "call_summary": "краткое содержание 1-2 предложения",
-  "checklist": {{
-    "greeting": true/false,
-    "introduced_himself": true/false,
-    "identified_need": true/false,
-    "informed_price": true/false,
-    "agreed_datetime": true/false,
-    "handled_objection": true/false,
-    "farewell": true/false
-  }},
-  "metrics": {{
-    "interruptions_count": число,
-    "hold_time_sec": число,
-    "medication_mentioned": true/false
-  }}
-}}
-
-Диалог:
+<|im_end|>
+<|im_start|>user
+Проанализируй следующий диалог:
+---
 {transcript}
-',
+---
+Верни JSON-объект с результатами анализа.
+<|im_end|>',
     TRUE,
-    '[{"key": "politeness_score", "type": "num", "description": "Оценка вежливости оператора от 0 до 10"}, {"key": "client_sentiment", "type": "str", "description": "Настроение клиента: positive, neutral, negative или conflict"}, {"key": "call_purpose", "type": "str", "description": "Цель звонка: appointment, consultation, complaint, cancel_appointment или other"}, {"key": "call_summary", "type": "str", "description": "Краткое содержание диалога (1-2 предложения)"}, {"key": "checklist", "type": "dict", "description": "Чек-лист: greeting (bool), introduced_himself (bool), identified_need (bool), informed_price (bool), agreed_datetime (bool), handled_objection (bool), farewell (bool)"}, {"key": "metrics", "type": "dict", "description": "Метрики звонка: interruptions_count (num), hold_time_sec (num), medication_mentioned (bool)"}]'
+    '{"main": [{"key": "politeness_score", "type": "num", "description": "Оценка вежливости оператора от 0 до 10"}, {"key": "client_sentiment", "type": "str", "description": "Настроение клиента: positive, neutral, negative или conflict"}, {"key": "call_purpose", "type": "str", "description": "Цель звонка: appointment, consultation, complaint, cancel_appointment или other"}, {"key": "call_summary", "type": "str", "description": "Краткое содержание диалога (1-2 предложения)"}], "checklist": [{"key": "greeting", "type": "bool", "description": "Приветствие"}, {"key": "introduced_himself", "type": "bool", "description": "Представился"}, {"key": "identified_need", "type": "bool", "description": "Выявил потребность"}, {"key": "informed_price", "type": "bool", "description": "Сообщил стоимость"}, {"key": "agreed_datetime", "type": "bool", "description": "Согласовал дату/время"}, {"key": "handled_objection", "type": "bool", "description": "Отработал возражение"}, {"key": "farewell", "type": "bool", "description": "Прощание"}], "metrics": [{"key": "interruptions_count", "type": "num", "description": "Количество перебиваний"}, {"key": "hold_time_sec", "type": "num", "description": "Время удержания в секундах"}, {"key": "medication_mentioned", "type": "bool", "description": "Упоминание лекарств"}]}'
 );
 
 CREATE TABLE evaluations (

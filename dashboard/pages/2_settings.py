@@ -92,37 +92,125 @@ if st.session_state.show_editor:
     text = col_text1.text_area("Текст промпта (в формате ChatML)", value=prompt['prompt_text'] if prompt else "", height=300)
     st.session_state.test_transcript = col_text2.text_area("Тестовый транскрипт", value=st.session_state.test_transcript, height=300)
 
-    # Редактор Pydantic схемы
-    raw_schema = prompt['schema_json'] if prompt and 'schema_json' in prompt else '[]'
+    # Редактор Pydantic схемы (вложенные разделы)
+    st.write("### Структура JSON-ответа (Pydantic Схема)")
+    schema_tab = st.selectbox(
+        "Выберите набор анализируемых данных для редактирования:",
+        options=["Основные", "Чек-лист", "Метрики"],
+        key=f"schema_tab_select_{p_id if p_id else 'new'}"
+    )
+
+    # Извлечение текущей схемы из prompt
+    raw_schema = prompt['schema_json'] if prompt and 'schema_json' in prompt else '{}'
     if not raw_schema:
-        raw_schema = '[]'
+        raw_schema = '{}'
     if isinstance(raw_schema, str):
         try:
-            schema_data = json.loads(raw_schema)
+            schema_dict = json.loads(raw_schema)
         except:
-            schema_data = []
+            schema_dict = {}
     else:
-        schema_data = raw_schema
+        schema_dict = raw_schema
 
-    df_schema = pd.DataFrame(schema_data)
-    if df_schema.empty or "key" not in df_schema.columns:
-        df_schema = pd.DataFrame(columns=["key", "type", "description"])
+    if not isinstance(schema_dict, dict):
+        schema_dict = {}
 
-    st.write("### Структура JSON-ответа (Pydantic Схема)")
-    st.write("Настройте ключи, типы и описания для формирования Pydantic модели:")
+    # Убеждаемся, что все 3 ключа существуют
+    if 'main' not in schema_dict or not schema_dict['main']:
+        schema_dict['main'] = [
+            {"key": "politeness_score", "type": "num", "description": "Оценка вежливости оператора от 0 до 10"},
+            {"key": "client_sentiment", "type": "str", "description": "Настроение клиента: positive, neutral, negative или conflict"},
+            {"key": "call_purpose", "type": "str", "description": "Цель звонка: appointment, consultation, complaint, cancel_appointment или other"},
+            {"key": "call_summary", "type": "str", "description": "Краткое содержание диалога (1-2 предложения)"}
+        ]
+    if 'checklist' not in schema_dict:
+        schema_dict['checklist'] = []
+    if 'metrics' not in schema_dict:
+        schema_dict['metrics'] = []
 
-    edited_schema_df = st.data_editor(
-        df_schema,
-        column_config={
-            "key": st.column_config.TextColumn("Имя ключа JSON", required=True),
-            "type": st.column_config.SelectboxColumn("Тип данных", options=["str", "bool", "num", "list", "dict", "enum"], required=True),
-            "description": st.column_config.TextColumn("Описание значения", required=True)
-        },
-        num_rows="dynamic",
-        key=f"schema_editor_{p_id if p_id else 'new'}",
-        hide_index=True,
-        width='stretch'
-    )
+    # Храним текущие списки во временной структуре в session_state, чтобы сохранять изменения между переключениями вкладок
+    session_schema_key = f"temp_schema_dict_{p_id if p_id else 'new'}"
+    if session_schema_key not in st.session_state:
+        st.session_state[session_schema_key] = schema_dict
+
+    current_schema = st.session_state[session_schema_key]
+
+    if schema_tab == "Основные":
+        st.write("ℹ️ *Для обязательных основных параметров ключи и типы фиксированы. Вы можете редактировать их текстовые описания.*")
+        df_main = pd.DataFrame(current_schema['main'])
+        edited_main_df = st.data_editor(
+            df_main,
+            column_config={
+                "key": st.column_config.TextColumn("Имя ключа JSON", disabled=True),
+                "type": st.column_config.TextColumn("Тип данных", disabled=True),
+                "description": st.column_config.TextColumn("Описание значения", required=True)
+            },
+            num_rows="fixed",
+            key=f"main_editor_{p_id if p_id else 'new'}",
+            hide_index=True,
+            width='stretch'
+        )
+        current_schema['main'] = edited_main_df.to_dict(orient="records")
+
+    elif schema_tab == "Чек-лист":
+        st.write("ℹ️ *Для чек-листа все параметры имеют логический тип (bool). Вы можете добавлять и удалять пункты чек-листа.*")
+        df_chk = pd.DataFrame(current_schema['checklist'])
+        if df_chk.empty or "key" not in df_chk.columns:
+            df_chk = pd.DataFrame(columns=["key", "type", "description"])
+        # Убеждаемся что поле type всегда заполнено bool
+        df_chk['type'] = 'bool'
+
+        edited_chk_df = st.data_editor(
+            df_chk,
+            column_config={
+                "key": st.column_config.TextColumn("Пункт чек-листа (латиницей, например, greeting)", required=True),
+                "type": st.column_config.TextColumn("Тип данных", disabled=True),
+                "description": st.column_config.TextColumn("Описание пункта чек-листа", required=True)
+            },
+            num_rows="dynamic",
+            key=f"checklist_editor_{p_id if p_id else 'new'}",
+            hide_index=True,
+            width='stretch'
+        )
+
+        chk_records = []
+        for _, row in edited_chk_df.iterrows():
+            if pd.notna(row['key']) and str(row['key']).strip():
+                chk_records.append({
+                    "key": str(row['key']).strip(),
+                    "type": "bool",
+                    "description": str(row['description']).strip() if pd.notna(row['description']) else ""
+                })
+        current_schema['checklist'] = chk_records
+
+    elif schema_tab == "Метрики":
+        st.write("ℹ️ *Здесь настраиваются дополнительные числовые или строковые метрики звонка.*")
+        df_met = pd.DataFrame(current_schema['metrics'])
+        if df_met.empty or "key" not in df_met.columns:
+            df_met = pd.DataFrame(columns=["key", "type", "description"])
+
+        edited_met_df = st.data_editor(
+            df_met,
+            column_config={
+                "key": st.column_config.TextColumn("Имя ключа метрики (латиницей, например, hold_time_sec)", required=True),
+                "type": st.column_config.SelectboxColumn("Тип данных", options=["num", "str", "bool", "list", "dict"], required=True),
+                "description": st.column_config.TextColumn("Описание метрики", required=True)
+            },
+            num_rows="dynamic",
+            key=f"metrics_editor_{p_id if p_id else 'new'}",
+            hide_index=True,
+            width='stretch'
+        )
+
+        met_records = []
+        for _, row in edited_met_df.iterrows():
+            if pd.notna(row['key']) and str(row['key']).strip():
+                met_records.append({
+                    "key": str(row['key']).strip(),
+                    "type": str(row['type']).strip() if pd.notna(row['type']) else "num",
+                    "description": str(row['description']).strip() if pd.notna(row['description']) else ""
+                })
+        current_schema['metrics'] = met_records
 
     col_f1, col_f2, col_f3, col_f4 = st.columns([1, 1, 1, 1])
     save_btn = col_f1.button("Сохранить", width='stretch')
@@ -136,18 +224,10 @@ if st.session_state.show_editor:
             if not is_valid:
                 st.error(f"Ошибка валидации промпта: {err_msg}")
             else:
-                # Превращаем DataFrame в список dict-ов для сохранения
-                new_schema_list = []
-                for _, row in edited_schema_df.iterrows():
-                    if pd.notna(row['key']) and str(row['key']).strip():
-                        new_schema_list.append({
-                            "key": str(row['key']).strip(),
-                            "type": str(row['type']).strip(),
-                            "description": str(row['description']).strip()
-                        })
-
-                upsert_prompt(name, text, is_default=prompt['is_default'] if prompt else False, prompt_id=p_id, schema_json=new_schema_list)
+                upsert_prompt(name, text, is_default=prompt['is_default'] if prompt else False, prompt_id=p_id, schema_json=current_schema)
                 st.success("Сохранено!")
+                if session_schema_key in st.session_state:
+                    del st.session_state[session_schema_key]
                 st.session_state.show_editor = False
                 st.session_state.editing_prompt = None
                 st.session_state.check_result = None
@@ -156,6 +236,8 @@ if st.session_state.show_editor:
             st.error("Название и текст не могут быть пустыми.")
 
     if cancel_btn:
+        if session_schema_key in st.session_state:
+            del st.session_state[session_schema_key]
         st.session_state.show_editor = False
         st.session_state.editing_prompt = None
         st.session_state.check_result = None
@@ -170,17 +252,7 @@ if st.session_state.show_editor:
             else:
                 with st.status("Выполняется анализ...", expanded=True) as status:
                     try:
-                        # Формируем список полей для передачи в check_prompt
-                        new_schema_list = []
-                        for _, row in edited_schema_df.iterrows():
-                            if pd.notna(row['key']) and str(row['key']).strip():
-                                new_schema_list.append({
-                                    "key": str(row['key']).strip(),
-                                    "type": str(row['type']).strip(),
-                                    "description": str(row['description']).strip()
-                                })
-
-                        full_response = st.write_stream(check_prompt(text, st.session_state.test_transcript, stream=True, schema_fields=new_schema_list))
+                        full_response = st.write_stream(check_prompt(text, st.session_state.test_transcript, stream=True, schema_fields=current_schema))
                         st.session_state.check_result = full_response
                         status.update(label="Анализ завершен!", state="complete", expanded=False)
                         st.rerun()
