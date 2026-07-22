@@ -54,7 +54,7 @@ sudo python3.12 -m pip install -r $BASE_DIR/SpeechAn/requirements.txt --break-sy
 # 7. Загрузка модели и создание конфига
 echo "[7/7] Setup assets and config..."
 # Предварительная загрузка моделей Qwen2.5-7B-Instruct GGUF
-if [ ! -f "$BASE_DIR/models/qwen2.5-7b-instruct-q4_k_m.gguf" ] || [ ! -f "$BASE_DIR/models/qwen2.5-7b-instruct-q8_0.gguf" ]; then
+if [ ! -f "$BASE_DIR/models/qwen2.5-7b-instruct-q4_k_m-00001-of-00002.gguf" ] || [ ! -f "$BASE_DIR/models/qwen2.5-7b-instruct-q8_0-00001-of-00003.gguf" ]; then
     echo "Downloading Qwen2.5-7B-Instruct GGUF models (Q4_K_M and Q8_0)..."
     sudo python3.12 -c "
 from huggingface_hub import hf_hub_download
@@ -63,12 +63,15 @@ save_dir = '$BASE_DIR/models'
 os.makedirs(save_dir, exist_ok=True)
 try:
     print('Downloading Q4_K_M...')
-    hf_hub_download(repo_id='Qwen/Qwen2.5-7B-Instruct-GGUF', filename='qwen2.5-7b-instruct-q4_k_m.gguf', local_dir=save_dir)
+    hf_hub_download(repo_id='Qwen/Qwen2.5-7B-Instruct-GGUF', filename='qwen2.5-7b-instruct-q4_k_m-00001-of-00002.gguf', local_dir=save_dir)
+    hf_hub_download(repo_id='Qwen/Qwen2.5-7B-Instruct-GGUF', filename='qwen2.5-7b-instruct-q4_k_m-00002-of-00002.gguf', local_dir=save_dir)
 except Exception as e:
     print(f'Failed to download Q4_K_M: {e}')
 try:
     print('Downloading Q8_0...')
-    hf_hub_download(repo_id='Qwen/Qwen2.5-7B-Instruct-GGUF', filename='qwen2.5-7b-instruct-q8_0.gguf', local_dir=save_dir)
+    hf_hub_download(repo_id='Qwen/Qwen2.5-7B-Instruct-GGUF', filename='qwen2.5-7b-instruct-q8_0-00001-of-00003.gguf', local_dir=save_dir)
+    hf_hub_download(repo_id='Qwen/Qwen2.5-7B-Instruct-GGUF', filename='qwen2.5-7b-instruct-q8_0-00002-of-00003.gguf', local_dir=save_dir)
+    hf_hub_download(repo_id='Qwen/Qwen2.5-7B-Instruct-GGUF', filename='qwen2.5-7b-instruct-q8_0-00003-of-00003.gguf', local_dir=save_dir)
 except Exception as e:
     print(f'Failed to download Q8_0: {e}')
 "
@@ -93,7 +96,7 @@ NUM_ASR_WORKERS=3
 NUM_LLM_WORKERS=2
 NUM_WORKERS=5
 OMP_NUM_THREADS=20
-LLM_MODEL_PATH=$BASE_DIR/models/qwen2.5-7b-instruct-q4_k_m.gguf
+LLM_MODEL_PATH=$BASE_DIR/models/qwen2.5-7b-instruct-q4_k_m-00001-of-00002.gguf
 
 WEB_USER=admin
 WEB_PASSWORD=admin

@@ -99,9 +99,9 @@ def get_llm():
             active_model = get_system_setting('active_model', 'q4_k_m')
 
             if active_model == 'q8_0':
-                model_filename = "qwen2.5-7b-instruct-q8_0.gguf"
+                model_filename = "qwen2.5-7b-instruct-q8_0-00001-of-00003.gguf"
             else:
-                model_filename = "qwen2.5-7b-instruct-q4_k_m.gguf"
+                model_filename = "qwen2.5-7b-instruct-q4_k_m-00001-of-00002.gguf"
 
             possible_paths = [
                 f"models/{model_filename}",
@@ -119,9 +119,16 @@ def get_llm():
                 # Fallback к любому файлу .gguf в models/
                 if os.path.exists("models"):
                     for f in os.listdir("models"):
-                        if f.endswith(".gguf"):
-                            model_path = os.path.join("models", f)
-                            break
+                        if f.endswith(".gguf") and "-of-" in f:
+                            # Стараемся взять первую часть
+                            if "-00001-of-" in f:
+                                model_path = os.path.join("models", f)
+                                break
+                    if not model_path:
+                        for f in os.listdir("models"):
+                            if f.endswith(".gguf"):
+                                model_path = os.path.join("models", f)
+                                break
 
             if not model_path:
                 model_path = f"models/{model_filename}"
