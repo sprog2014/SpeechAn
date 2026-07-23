@@ -67,6 +67,24 @@ def process_asr(file_path: str):
                 metadata = fetch_call_metadata(linkedid)
             except Exception as e:
                 logger.error(f"[{linkedid}] Failed to fetch metadata: {e}")
+                # Чтобы предотвратить бесконечный цикл обработки, создаем запись в 'calls' со статусом 'error'
+                try:
+                    from datetime import datetime
+                    try:
+                        ts = float(linkedid.split('.')[0])
+                        calldate = datetime.fromtimestamp(ts)
+                    except:
+                        calldate = datetime.fromtimestamp(os.path.getmtime(file_path))
+
+                    cur = conn.cursor()
+                    cur.execute("""
+                        INSERT INTO calls (linkedid, calldate, file_path, processing_status)
+                        VALUES (%s, %s, %s, 'error')
+                        ON CONFLICT (linkedid) DO UPDATE SET processing_status = 'error'
+                    """, (linkedid, calldate, file_path))
+                    conn.commit()
+                except Exception as db_err:
+                    logger.error(f"[{linkedid}] Failed to insert placeholder call record: {db_err}")
                 return False
 
             # 3. Upsert call record (this sets status to 'processing')
